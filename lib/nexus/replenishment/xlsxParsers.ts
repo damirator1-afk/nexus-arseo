@@ -6,6 +6,7 @@ import type {
   MonthlySales,
   SalesTransaction,
   SkuCategory,
+  SkuCostPrice,
   SkuCurrentStock,
   SkuReservation,
   XlsxInput,
@@ -289,5 +290,24 @@ export function parseSkuCurrentStocks(input: XlsxInput, sheetName?: string): Sku
     const skuValue = text(row[sku]);
     const stockValue = numberValue(row[stock]);
     return skuValue && stockValue !== null ? [{ sku: skuValue, currentStock: Math.max(0, stockValue) }] : [];
+  });
+}
+
+/**
+ * Reads per-unit cost price ("СС реал") when the supplier dashboard exposes one — currently only
+ * Systeme Electric's export. IEK has no price column anywhere in its files; calling this against
+ * an IEK workbook throws (no "сс реал" header to find), so callers only invoke it per-supplier.
+ * Presentation-only: never fed into assembleReplenishmentInput/calculateReplenishment.
+ */
+export function parseSkuCostPrices(input: XlsxInput, sheetName?: string): SkuCostPrice[] {
+  const rows = rowsFromWorkbook(input, sheetName);
+  const headerIndex = findHeaderRow(rows, [/код 1с/, /сс реал/]);
+  const header = rows[headerIndex];
+  const sku = requireColumn(header, [/^код 1с$/], "Код 1с");
+  const price = requireColumn(header, [/сс реал/], "СС реал");
+  return rows.slice(headerIndex + 1).flatMap((row) => {
+    const skuValue = text(row[sku]);
+    const priceValue = numberValue(row[price]);
+    return skuValue && priceValue !== null && priceValue > 0 ? [{ sku: skuValue, costPrice: priceValue }] : [];
   });
 }

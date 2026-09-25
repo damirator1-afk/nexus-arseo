@@ -74,4 +74,16 @@ export interface SkuCurrentStock {
   currentStock: number;
 }
 
+export interface SkuCostPrice {
+  supplier?: string;
+  sku: string;
+  /**
+   * Per-unit cost price ("СС реал"), currently only exposed by Systeme Electric's dashboard
+   * export (724 of 3017 combined SKUs). IEK's source files carry no price field at all —
+   * this is presentation-only data (order sums for display), never used by the replenishment
+   * calculation itself, so its absence for most SKUs never blocks or skews a recommendation.
+   */
+  costPrice: number;
+}
+
 export type XlsxInput = ArrayBuffer | Uint8Array;

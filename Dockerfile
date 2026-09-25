@@ -29,6 +29,10 @@ RUN addgroup --system --gid 1001 nodejs \
 
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# output:"standalone" traces server code only -- it does not copy public/, so the real-data
+# demo files under public/demo/replenishment/ must be copied in explicitly or the auto-load
+# demo on /replenishment 404s in this image even though it works fine outside Docker.
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
 USER nextjs
 EXPOSE 3000

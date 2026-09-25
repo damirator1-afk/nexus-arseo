@@ -7,6 +7,7 @@ import {
   parseMonthlySales,
   parseMinimumOrderQuantities,
   parseSalesTransactions,
+  parseSkuCostPrices,
   parseSkuCurrentStocks,
   parseSkuReservations,
 } from "./xlsxParsers.ts";
@@ -130,5 +131,19 @@ test("current-stock parser selects the exact dashboard stock column", () => {
   assert.deepEqual(parseSkuCurrentStocks(bytes), [
     { sku: "SKU-1", currentStock: 20 },
     { sku: "SKU-2", currentStock: 0 },
+  ]);
+});
+
+test("cost-price parser reads the dashboard's real-cost column and drops zero/missing prices", () => {
+  const bytes = workbookBytes([
+    [null, null, null, null],
+    ["№", "Код 1с", "Наименование", "СС реал", "Остаток"],
+    [1, "SKU-1", "Автомат", 1050.61, 20],
+    [2, "SKU-2", "Кабель без продаж", 0, 0],
+    [3, "SKU-3", "Реле", "899,75", 4],
+  ]);
+  assert.deepEqual(parseSkuCostPrices(bytes), [
+    { sku: "SKU-1", costPrice: 1050.61 },
+    { sku: "SKU-3", costPrice: 899.75 },
   ]);
 });
