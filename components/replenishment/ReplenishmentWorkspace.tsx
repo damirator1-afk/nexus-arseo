@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { assembleReplenishmentInput } from "@/lib/nexus/replenishment/assemble";
 import { calculateReplenishment, type ReplenishmentPlan, type ReplenishmentRecommendation } from "@/lib/nexus/replenishment/calculation";
+import type { ConfirmedOrderLine } from "@/lib/nexus/replenishment/orderShare";
 import { summarizePlan } from "@/lib/nexus/replenishment/planSelectors";
 import { parseSkuCostPrices } from "@/lib/nexus/replenishment/xlsxParsers";
 import { fetchDemoSupplierBuffers } from "./demoData";
@@ -70,15 +71,22 @@ export function ReplenishmentWorkspace() {
     items: group.items.filter((item) => matchesExceptionView(item, exceptionView) && `${item.sku} ${item.productName}`.toLocaleLowerCase("ru-RU").includes(query.toLocaleLowerCase("ru-RU"))).sort((a, b) => urgencyRank[a.urgency] - urgencyRank[b.urgency] || b.recommendedOrder - a.recommendedOrder),
   })).map((group) => ({ ...group, totalRecommendedUnits: group.items.reduce((sum, item) => sum + item.recommendedOrder, 0) })) ?? [], [plan, query, exceptionView]);
 
-  const confirmedRows = useMemo(() => plan?.suppliers.flatMap((group) => group.items.flatMap((item) => {
+  const confirmedRows = useMemo<ConfirmedOrderLine[]>(() => plan?.suppliers.flatMap((group) => group.items.flatMap((item) => {
     const decision = decisions[`${item.supplier}:${item.sku}`];
-    return decision?.status === "confirmed" ? [{ item, quantity: decision.quantity }] : [];
+    return decision?.status === "confirmed" ? [{
+      supplier: item.supplier,
+      sku: item.sku,
+      productName: item.productName,
+      recommendedOrder: item.recommendedOrder,
+      quantity: decision.quantity,
+      urgency: item.urgency,
+    }] : [];
   })) ?? [], [plan, decisions]);
 
   const downloadConfirmedOrders = () => {
     if (!confirmedRows.length) return;
     const header = ["Поставщик", "SKU", "Наименование", "Рекомендация", "Подтверждено", "Срочность"];
-    const rows = confirmedRows.map(({ item, quantity }) => [item.supplier, item.sku, item.productName, item.recommendedOrder, quantity, item.urgency]);
+    const rows = confirmedRows.map((item) => [item.supplier, item.sku, item.productName, item.recommendedOrder, item.quantity, item.urgency]);
     const csv = `﻿${[header, ...rows].map((row) => row.map(csvCell).join(";")).join("\r\n")}`;
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
@@ -216,7 +224,7 @@ export function ReplenishmentWorkspace() {
         plan={plan}
         visible={visible}
         costPrices={costPrices}
-        confirmedRowsCount={confirmedRows.length}
+        confirmedRows={confirmedRows}
         query={query}
         setQuery={setQuery}
         exceptionView={exceptionView}

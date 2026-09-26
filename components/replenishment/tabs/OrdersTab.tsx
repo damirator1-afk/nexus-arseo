@@ -2,7 +2,9 @@
 
 import type { Dispatch, SetStateAction } from "react";
 import type { ReplenishmentPlan, ReplenishmentRecommendation, ReplenishmentUrgency } from "@/lib/nexus/replenishment/calculation";
+import type { ConfirmedOrderLine } from "@/lib/nexus/replenishment/orderShare";
 import { AlertIcon, BoxIcon, ClockIcon, CoinIcon, SearchIcon } from "../icons";
+import { SupplierDispatch } from "../SupplierDispatch";
 import {
   demandPatternLabel, exceptionViews, explanation, lifecycleLabel, matchesExceptionView,
   money, number, urgencyLabel, validManagerQuantity,
@@ -20,7 +22,7 @@ export function OrdersTab(props: {
   plan: ReplenishmentPlan;
   visible: ReplenishmentPlan["suppliers"];
   costPrices: Map<string, number>;
-  confirmedRowsCount: number;
+  confirmedRows: ConfirmedOrderLine[];
   query: string;
   setQuery: (query: string) => void;
   exceptionView: ExceptionView;
@@ -35,7 +37,7 @@ export function OrdersTab(props: {
   focusSku?: string | null;
 }) {
   const {
-    plan, visible, costPrices, confirmedRowsCount, query, setQuery, exceptionView, setExceptionView,
+    plan, visible, costPrices, confirmedRows, query, setQuery, exceptionView, setExceptionView,
     decisions, setDecisions, narratives, narrating, requestNarrative, downloadConfirmedOrders,
     onNewCalculation, focusSku,
   } = props;
@@ -48,7 +50,7 @@ export function OrdersTab(props: {
     <div className={styles.sectionHead}>
       <div><p>Результат на {plan.asOfMonth}</p><h2>Рекомендации по поставщикам</h2></div>
       <div className={styles.resultActions}>
-        <button className={`${styles.btn} ${styles.btnPrimary}`} disabled={!confirmedRowsCount} onClick={downloadConfirmedOrders}>Экспорт в Excel ({confirmedRowsCount})</button>
+        <button className={`${styles.btn} ${styles.btnPrimary}`} disabled={!confirmedRows.length} onClick={downloadConfirmedOrders}>Экспорт в Excel ({confirmedRows.length})</button>
         <button className={styles.btn} onClick={onNewCalculation}>Новый расчёт</button>
       </div>
     </div>
@@ -63,6 +65,8 @@ export function OrdersTab(props: {
         <div className={styles.kSub}>цена известна у {pricedOrdering.length} позиций из тех, что к заказу</div>
       </div>
     </div>
+
+    <SupplierDispatch lines={confirmedRows} asOfMonth={plan.asOfMonth} />
 
     <div className={styles.searchInput} style={{ marginBottom: 16 }}>
       <SearchIcon size={16} />
