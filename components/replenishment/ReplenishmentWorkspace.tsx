@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { assembleReplenishmentInput, type ReplenishmentAssemblyMetadata } from "@/lib/nexus/replenishment/assemble";
 import { calculateReplenishment, type ReplenishmentPlan, type ReplenishmentRecommendation } from "@/lib/nexus/replenishment/calculation";
 import type { ConfirmedOrderLine } from "@/lib/nexus/replenishment/orderShare";
@@ -34,7 +34,6 @@ const TABS: Array<{ key: Tab; label: string }> = [
 
 export function ReplenishmentWorkspace() {
   const shellRef = useRef<HTMLElement>(null);
-  const autoRanRef = useRef(false);
 
   const [suppliers, setSuppliers] = useState<SupplierDefinition[]>(createInitialManualSuppliers);
   const [files, setFiles] = useState<FilesState>(() => Object.fromEntries(createInitialManualSuppliers().map((supplier) => [supplier.key, {}])));
@@ -170,17 +169,6 @@ export function ReplenishmentWorkspace() {
     } finally { setRunning(false); setProgress(""); }
   };
 
-  // Opens with a real, already-computed result — no click required — unless the user has switched
-  // to manual upload before this fires. Guarded by a ref (not state) so React's dev-mode double-effect
-  // cannot trigger two concurrent fetches of the ~15MB demo dataset.
-  useEffect(() => {
-    if (autoRanRef.current) return;
-    autoRanRef.current = true;
-    void runDemo();
-    // Intentionally mount-only: this is the initial, default-assumptions demo load.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const onGateRun = (requestedMode: Mode) => { if (requestedMode === "demo") void runDemo(); else void runManual(); };
 
   const onNewCalculation = () => {
@@ -254,7 +242,7 @@ export function ReplenishmentWorkspace() {
         {TABS.map((tab) => <button key={tab.key} className={`${styles.tab} ${activeTab === tab.key ? styles.tabActive : ""}`} onClick={() => setActiveTab(tab.key)}>{tab.label}</button>)}
       </nav>
 
-      {activeTab === "today" && <TodayTab plan={plan} summary={summary} dataSource={dataSource ?? "own"} costPrices={costPrices} onOpenSku={onOpenSku} />}
+      {activeTab === "today" && <TodayTab plan={plan} summary={summary} dataSource={dataSource ?? "own"} costPrices={costPrices} onOpenSku={onOpenSku} onNewCalculation={onNewCalculation} />}
       {activeTab === "orders" && <OrdersTab
         plan={plan}
         visible={visible}

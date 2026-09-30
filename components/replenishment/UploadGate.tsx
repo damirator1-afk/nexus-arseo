@@ -61,17 +61,17 @@ export function UploadGate(props: {
 
   return <section className={styles.uploadArea} aria-label="Загрузка исходных данных">
     <div className={styles.gateActions}>
-      <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} disabled={running && mode === "demo"} onClick={() => { onModeChange("demo"); onRun("demo"); }}>
-        {running && mode === "demo" ? "Загружаем демо…" : "Пересчитать демо на реальных данных"}
+      <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} disabled={running} onClick={() => { onModeChange("demo"); onRun("demo"); }}>
+        {running && mode === "demo" ? "Загружаем демо…" : "Посмотреть демо на реальных данных"}
       </button>
-      <button type="button" className={styles.btn} disabled={running} onClick={() => onModeChange("manual")}>Загрузить свои файлы →</button>
+      <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} disabled={running} onClick={() => onModeChange("manual")}>Загрузить свои документы</button>
     </div>
 
     {running
       ? <div className={styles.empty}>{progress || "Загрузка данных…"}</div>
       : <p className={styles.gateHint}>
           {mode === "demo"
-            ? "По умолчанию открывается готовый расчёт на реальных выгрузках IEK и Systeme Electric — файлы никуда не отправляются, всё считается в браузере."
+            ? "Демо использует реальные выгрузки IEK и Systeme Electric. Расчёт начнётся только после нажатия кнопки — все данные обрабатываются в браузере."
             : "Добавьте поставщиков и загрузите доступные XLSX. Обязателен только источник остатка; остальные файлы можно пропустить."}
         </p>}
 

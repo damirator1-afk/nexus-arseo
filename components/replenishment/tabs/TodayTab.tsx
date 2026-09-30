@@ -14,6 +14,7 @@ export function TodayTab(props: {
   dataSource: DataSource;
   costPrices: Map<string, number>;
   onOpenSku: (sku: string) => void;
+  onNewCalculation: () => void;
 }) {
   const { plan, summary, costPrices } = props;
   const priced = plan.suppliers.flatMap((group) => group.items).filter((item) => item.recommendedOrder > 0 && costPrices.has(supplierSkuKey(item.supplier, item.sku)));
@@ -26,7 +27,10 @@ export function TodayTab(props: {
     .slice(0, 8);
 
   return <>
-    <div className={styles.sectionHead}><div><p>Итоги</p><h2>Что важно знать сегодня</h2></div></div>
+    <div className={styles.sectionHead}>
+      <div><p>Итоги</p><h2>Что важно знать сегодня</h2></div>
+      <button type="button" className={styles.btn} onClick={props.onNewCalculation}>Новый расчёт</button>
+    </div>
 
     <div className={styles.kpis}>
       <div className={`${styles.kpi} ${styles.tCrit}`}>
