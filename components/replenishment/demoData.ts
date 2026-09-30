@@ -1,4 +1,10 @@
-import type { FileKind, SupplierKey } from "./shared";
+import type { FileKind, SupplierDefinition } from "./shared";
+
+export type DemoSupplierKey = "iek" | "systeme";
+export const DEMO_SUPPLIERS: Array<SupplierDefinition & { key: DemoSupplierKey }> = [
+  { key: "iek", name: "IEK" },
+  { key: "systeme", name: "Systeme Electric" },
+];
 
 /**
  * Static copies of the real partner XLSX files under `public/`, so the workspace can open with a
@@ -6,8 +12,8 @@ import type { FileKind, SupplierKey } from "./shared";
  * reproducibility dataset stays at `demo/data/replenishment/` (documented in README.md); these are
  * plain byte-identical copies made servable by Next.js.
  */
-const DEMO_DIR: Record<SupplierKey, string> = { iek: "iek", systeme: "systeme-electric" };
-const DEMO_FILENAMES: Record<SupplierKey, Record<FileKind, string>> = {
+const DEMO_DIR: Record<DemoSupplierKey, string> = { iek: "iek", systeme: "systeme-electric" };
+const DEMO_FILENAMES: Record<DemoSupplierKey, Record<FileKind, string>> = {
   iek: {
     transactions: "sales_transactions.xlsx",
     monthlySales: "monthly_sales.xlsx",
@@ -24,7 +30,7 @@ const DEMO_FILENAMES: Record<SupplierKey, Record<FileKind, string>> = {
   },
 };
 
-export async function fetchDemoSupplierBuffers(key: SupplierKey): Promise<Record<FileKind, Uint8Array>> {
+export async function fetchDemoSupplierBuffers(key: DemoSupplierKey): Promise<Record<FileKind, Uint8Array>> {
   const entries = await Promise.all(
     Object.entries(DEMO_FILENAMES[key]).map(async ([kind, filename]) => {
       const path = `/demo/replenishment/${DEMO_DIR[key]}/${filename}`;

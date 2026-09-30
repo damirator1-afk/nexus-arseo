@@ -1,16 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { assembleReplenishmentInput } from "@/lib/nexus/replenishment/assemble";
+import { assembleReplenishmentInput, type ReplenishmentAssemblyMetadata } from "@/lib/nexus/replenishment/assemble";
 import { calculateReplenishment, type ReplenishmentPlan, type ReplenishmentRecommendation } from "@/lib/nexus/replenishment/calculation";
 import type { ConfirmedOrderLine } from "@/lib/nexus/replenishment/orderShare";
 import { summarizePlan } from "@/lib/nexus/replenishment/planSelectors";
-import { parseSkuCostPrices } from "@/lib/nexus/replenishment/xlsxParsers";
-import { fetchDemoSupplierBuffers } from "./demoData";
+import { DEMO_SUPPLIERS, fetchDemoSupplierBuffers } from "./demoData";
 import {
-  buildAssumptions, buildSupplierParsedData, csvCell, DEFAULT_PLANNING, FILE_FIELDS, matchesExceptionView,
-  narrationInput, parseSupplierFromFiles, SUPPLIERS, urgencyRank,
-  type DataSource, type ExceptionView, type FilesState, type ManagerDecision, type PlanningControls,
+  buildAssumptions, buildSupplierParsedData, createInitialManualSuppliers, csvCell, DEFAULT_PLANNING, matchesExceptionView,
+  MissingStockSourceError, narrationInput, parseSupplierCostPrices, parseSupplierCostPricesFromBuffers,
+  parseSupplierFromFiles, supplierSkuKey, urgencyRank,
+  type DataSource, type ExceptionView, type FilesState, type ManagerDecision, type PlanningControls, type SupplierDefinition,
 } from "./shared";
 import { UploadGate } from "./UploadGate";
 import { ThemeToggle } from "./ThemeToggle";
@@ -36,13 +36,16 @@ export function ReplenishmentWorkspace() {
   const shellRef = useRef<HTMLElement>(null);
   const autoRanRef = useRef(false);
 
-  const [files, setFiles] = useState<FilesState>({ iek: {}, systeme: {} });
+  const [suppliers, setSuppliers] = useState<SupplierDefinition[]>(createInitialManualSuppliers);
+  const [files, setFiles] = useState<FilesState>(() => Object.fromEntries(createInitialManualSuppliers().map((supplier) => [supplier.key, {}])));
+  const [supplierErrors, setSupplierErrors] = useState<Record<string, string>>({});
   const [mode, setMode] = useState<Mode>("demo");
   const [plan, setPlan] = useState<ReplenishmentPlan>();
   const [dataSource, setDataSource] = useState<DataSource>();
-  // SKU -> per-unit cost price, presentation-only (never fed into assembleReplenishmentInput /
-  // calculateReplenishment). Only Systeme Electric's dashboard exposes a price column; IEK has
-  // none. Built alongside the parse step, not part of SupplierParsedData.
+  const [assemblyMetadata, setAssemblyMetadata] = useState<ReplenishmentAssemblyMetadata>();
+  // Supplier/SKU -> per-unit cost price, presentation-only (never fed into
+  // assembleReplenishmentInput/calculateReplenishment). Discovered opportunistically in any
+  // supplied workbook and kept outside SupplierParsedData.
   const [costPrices, setCostPrices] = useState<Map<string, number>>(new Map());
   const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
@@ -56,14 +59,18 @@ export function ReplenishmentWorkspace() {
   const [decisions, setDecisions] = useState<Record<string, ManagerDecision>>({});
   const [planning, setPlanning] = useState<PlanningControls>(DEFAULT_PLANNING);
 
-  const selectedCount = Object.values(files).flatMap((group) => Object.values(group)).length;
-  const ready = selectedCount === FILE_FIELDS.length * SUPPLIERS.length;
+  const selectedCount = suppliers.flatMap((supplier) => Object.values(files[supplier.key] ?? {})).filter(Boolean).length;
+  const normalizedNames = suppliers.map((supplier) => supplier.name.trim().toLocaleLowerCase("ru-RU"));
+  const ready = suppliers.length > 0
+    && suppliers.every((supplier) => supplier.name.trim() && Object.values(files[supplier.key] ?? {}).some(Boolean))
+    && new Set(normalizedNames).size === normalizedNames.length
+    && !Object.keys(supplierErrors).length;
 
   const summary = useMemo(() => summarizePlan(plan?.suppliers.flatMap((group) => group.items) ?? []), [plan]);
 
   const priceCoverage = useMemo(() => {
     const items = plan?.suppliers.flatMap((group) => group.items) ?? [];
-    return { known: items.filter((item) => costPrices.has(item.sku)).length, total: items.length };
+    return { known: items.filter((item) => costPrices.has(supplierSkuKey(item.supplier, item.sku))).length, total: items.length };
   }, [plan, costPrices]);
 
   const visible = useMemo(() => plan?.suppliers.map((group) => ({
@@ -103,18 +110,18 @@ export function ReplenishmentWorkspace() {
       // uninterrupted block would freeze clicks/repaints for 10+ seconds. Parsing yields between
       // steps (see buildSupplierParsedData) and reports progress here so the tab stays responsive
       // and visibly working instead of looking stuck.
-      const results = await Promise.all(SUPPLIERS.map(async (supplier) => {
+      const results = await Promise.all(DEMO_SUPPLIERS.map(async (supplier) => {
         const buffers = await fetchDemoSupplierBuffers(supplier.key);
-        const parsedData = await buildSupplierParsedData(supplier.key, buffers, setProgress);
-        // Cost price ("СС реал") is presentation-only and only Systeme Electric's dashboard has
-        // it; parsed from the same already-fetched "inbound" buffer, no extra request.
-        const prices = supplier.key === "systeme" ? parseSkuCostPrices(buffers.inbound) : [];
+        const parsedData = await buildSupplierParsedData(supplier, buffers, setProgress, ["inbound"]);
+        const prices = parseSupplierCostPricesFromBuffers({ inbound: buffers.inbound });
         return { parsedData, prices };
       }));
       setProgress("Считаем рекомендации по 3000+ позициям…");
       await new Promise((resolve) => setTimeout(resolve, 0));
-      setPlan(calculateReplenishment(assembleReplenishmentInput(results.map((r) => r.parsedData), buildAssumptions(planning))));
-      setCostPrices(new Map(results.flatMap((r) => r.prices.map((p) => [p.sku, p.costPrice] as const))));
+      const assembled = assembleReplenishmentInput(results.map((r) => r.parsedData), buildAssumptions(planning));
+      setPlan(calculateReplenishment(assembled));
+      setAssemblyMetadata({ missingSources: assembled.missingSources, asOfMonthSource: assembled.asOfMonthSource });
+      setCostPrices(new Map(results.flatMap((result) => result.prices.map((price) => [supplierSkuKey(result.parsedData.supplier, price.sku), price.costPrice] as const))));
       setDataSource("demo"); setDecisions({}); setExceptionView("all"); setActiveTab("today");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Не удалось загрузить демо-данные на реальных файлах партнёра.");
@@ -123,15 +130,40 @@ export function ReplenishmentWorkspace() {
   };
 
   const runManual = async () => {
-    setRunning(true); setError(""); setProgress("Читаем выбранные файлы…");
+    setRunning(true); setError(""); setSupplierErrors({}); setProgress("Читаем выбранные файлы…");
     try {
-      const parsed = await Promise.all(SUPPLIERS.map((supplier) => parseSupplierFromFiles(supplier.key, files[supplier.key], setProgress)));
-      const systemeInbound = files.systeme.inbound;
-      const prices = systemeInbound ? parseSkuCostPrices(new Uint8Array(await systemeInbound.arrayBuffer())) : [];
+      const names = suppliers.map((supplier) => supplier.name.trim());
+      if (names.some((name) => !name)) throw new Error("Укажите название каждого поставщика.");
+      if (new Set(names.map((name) => name.toLocaleLowerCase("ru-RU"))).size !== names.length) throw new Error("Названия поставщиков должны быть уникальными.");
+
+      const settled = await Promise.allSettled(suppliers.map(async (supplier) => ({
+        parsedData: await parseSupplierFromFiles(supplier, files[supplier.key] ?? {}, setProgress),
+        prices: await parseSupplierCostPrices(files[supplier.key] ?? {}),
+      })));
+      const stockErrors: Record<string, string> = {};
+      const parsed: Awaited<ReturnType<typeof parseSupplierFromFiles>>[] = [];
+      const prices: Array<{ supplier: string; sku: string; costPrice: number }> = [];
+      settled.forEach((result) => {
+        if (result.status === "fulfilled") {
+          parsed.push(result.value.parsedData);
+          prices.push(...result.value.prices.map((price) => ({ ...price, supplier: result.value.parsedData.supplier })));
+        } else if (result.reason instanceof MissingStockSourceError) {
+          stockErrors[result.reason.supplierKey] = result.reason.message;
+        } else {
+          throw result.reason;
+        }
+      });
+      if (Object.keys(stockErrors).length) {
+        setSupplierErrors(stockErrors);
+        setError("Проверьте источники остатка у отмеченных поставщиков.");
+        return;
+      }
       setProgress("Считаем рекомендации по 3000+ позициям…");
       await new Promise((resolve) => setTimeout(resolve, 0));
-      setPlan(calculateReplenishment(assembleReplenishmentInput(parsed, buildAssumptions(planning))));
-      setCostPrices(new Map(prices.map((p) => [p.sku, p.costPrice] as const)));
+      const assembled = assembleReplenishmentInput(parsed, buildAssumptions(planning));
+      setPlan(calculateReplenishment(assembled));
+      setAssemblyMetadata({ missingSources: assembled.missingSources, asOfMonthSource: assembled.asOfMonthSource });
+      setCostPrices(new Map(prices.map((price) => [supplierSkuKey(price.supplier, price.sku), price.costPrice] as const)));
       setDataSource("own"); setDecisions({}); setExceptionView("all"); setActiveTab("today");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Не удалось обработать XLSX-файлы.");
@@ -149,12 +181,11 @@ export function ReplenishmentWorkspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const onGateRun = () => { if (mode === "demo") void runDemo(); else void runManual(); };
+  const onGateRun = (requestedMode: Mode) => { if (requestedMode === "demo") void runDemo(); else void runManual(); };
 
   const onNewCalculation = () => {
-    setPlan(undefined); setDataSource(undefined); setDecisions({}); setExceptionView("all");
-    setQuery(""); setFocusSku(null); setMode("demo"); setActiveTab("today");
-    void runDemo();
+    setPlan(undefined); setDataSource(undefined); setAssemblyMetadata(undefined); setDecisions({}); setExceptionView("all");
+    setQuery(""); setFocusSku(null); setMode("manual"); setActiveTab("today");
   };
 
   const onOpenSku = (sku: string) => {
@@ -185,8 +216,8 @@ export function ReplenishmentWorkspace() {
   return <main className={styles.shell} ref={shellRef}>
     <header className={styles.topbar}>
       <a href="/" className={styles.brand}>
-        <span>ЭК</span>
-        <div><b>Электрокомплект</b><small>Автозаказ поставщикам</small></div>
+        <span>N</span>
+        <div><b>Nexus</b><small>Автозаказ поставщикам</small></div>
       </a>
       <div style={{ marginLeft: "auto" }}><ThemeToggle shellRef={shellRef} /></div>
     </header>
@@ -202,8 +233,12 @@ export function ReplenishmentWorkspace() {
     {!plan && <UploadGate
       mode={mode}
       onModeChange={setMode}
+      suppliers={suppliers}
+      setSuppliers={setSuppliers}
       files={files}
       setFiles={setFiles}
+      supplierErrors={supplierErrors}
+      setSupplierErrors={setSupplierErrors}
       planning={planning}
       setPlanning={setPlanning}
       error={error}
@@ -240,9 +275,9 @@ export function ReplenishmentWorkspace() {
       />}
       {activeTab === "calendar" && <CalendarTab plan={plan} onOpenSku={onOpenSku} />}
       {activeTab === "analytics" && <AnalyticsTab summary={summary} priceCoverage={priceCoverage} />}
-      {activeTab === "methodology" && <MethodologyTab planning={planning} />}
+      {activeTab === "methodology" && <MethodologyTab planning={planning} missingSources={assemblyMetadata?.missingSources ?? {}} asOfMonthSource={assemblyMetadata?.asOfMonthSource ?? "opening_stocks"} />}
     </div>}
 
-    <footer className={styles.footer}><span>HackAlem AI / ТОО «Электрокомплект»</span><span>Проверяемая модель · без скрытых вычислений</span></footer>
+    <footer className={styles.footer}><span>Nexus · управление пополнением</span><span>Проверяемая модель · без скрытых вычислений</span></footer>
   </main>;
 }

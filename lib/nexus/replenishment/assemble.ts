@@ -1,6 +1,8 @@
 import type { ReplenishmentInput, ReplenishmentOptions, SkuPlanningConfig } from "./calculation.ts";
 import type { InboundShipment, MinimumOrderQuantity, MonthlyOpeningStock, MonthlySales, SalesTransaction, SkuCategory, SkuCurrentStock, SkuReservation, YearMonth } from "./types.ts";
 
+export type ReplenishmentSourceKind = "transactions" | "monthlySales" | "openingStocks" | "inbound" | "moq";
+
 export interface SupplierParsedData {
   supplier: string;
   monthlySales: MonthlySales[];
@@ -11,13 +13,23 @@ export interface SupplierParsedData {
   categories?: SkuCategory[];
   reservations?: SkuReservation[];
   currentStocks?: SkuCurrentStock[];
+  /** File kinds not supplied by this supplier; retained for transparent UI disclosure. */
+  missingSources?: ReplenishmentSourceKind[];
 }
+
+export interface ReplenishmentAssemblyMetadata {
+  missingSources: Record<string, ReplenishmentSourceKind[]>;
+  /** A current-stock-only input has no dated opening-balance month, so the run uses today's month. */
+  asOfMonthSource: "opening_stocks" | "current_date";
+}
+
+export type AssembledReplenishmentInput = ReplenishmentInput & ReplenishmentAssemblyMetadata;
 
 export interface AssemblyAssumptions {
   defaultLeadTimeMonths: number;
   reviewPeriodMonths: number;
   categoryServiceLevel: Record<string, number>;
-  /** Used only where the partner file has no SKU category (currently IEK). */
+  /** Used whenever a supplier file does not expose an SKU category. */
   defaultCategory: string;
   /** External forecast remains independent from the historical trend calculated later. */
   defaultForecastGrowthRate: number;
@@ -33,18 +45,20 @@ export const DEFAULT_ASSEMBLY_ASSUMPTIONS: AssemblyAssumptions = {
   defaultCategory: "UNCLASSIFIED",
   defaultForecastGrowthRate: 0,
   // Engineering assumptions until partner-provided service targets exist: top category 98%, middle 95%,
-  // lower categories 90%; IEK's unclassified fallback uses the neutral 95% target.
+  // lower categories 90%; unclassified SKUs use the neutral 95% target.
   categoryServiceLevel: { "1": 0.98, "2": 0.95, "3": 0.9, "4": 0.9, A: 0.98, B: 0.95, C: 0.9, UNCLASSIFIED: 0.95 },
 };
 
-function latestMonth(rows: MonthlyOpeningStock[]): YearMonth {
+function latestMonth(rows: MonthlyOpeningStock[]): YearMonth | null {
   const months = rows.map((row) => row.month).sort();
-  if (!months.length) throw new Error("Невозможно определить расчётный месяц: данные об остатках отсутствуют.");
-  return months.at(-1)!;
+  return months.at(-1) ?? null;
 }
 
-export function assembleReplenishmentInput(suppliers: SupplierParsedData[], assumptions: AssemblyAssumptions = DEFAULT_ASSEMBLY_ASSUMPTIONS): ReplenishmentInput {
+export function assembleReplenishmentInput(suppliers: SupplierParsedData[], assumptions: AssemblyAssumptions = DEFAULT_ASSEMBLY_ASSUMPTIONS): AssembledReplenishmentInput {
   if (!suppliers.length) throw new Error("Не переданы данные поставщиков.");
+  if (new Set(suppliers.map((item) => item.supplier)).size !== suppliers.length) {
+    throw new Error("Названия поставщиков должны быть уникальными.");
+  }
   // Supplier scope is attached here rather than in the file parsers: a workbook describes one supplier,
   // while the normalized calculation may contain identical 1C codes from several suppliers.
   const scoped = <T extends { sku: string }>(data: SupplierParsedData, rows: T[]): Array<T & { supplier: string }> =>
@@ -68,11 +82,29 @@ export function assembleReplenishmentInput(suppliers: SupplierParsedData[], assu
   });
   const categoryServiceLevel = { ...assumptions.categoryServiceLevel };
   for (const config of skuConfigs) if (categoryServiceLevel[config.category] === undefined) categoryServiceLevel[config.category] = categoryServiceLevel[assumptions.defaultCategory] ?? 0.95;
+  const latestOpeningStockMonth = latestMonth(openingStocks);
+  // A current-stock snapshot carries no authoritative month in the workbook. When every supplier
+  // uses snapshots only, today's month is the most honest planning anchor and the metadata below
+  // makes that fallback explicit to the user instead of presenting it as a source-file date.
+  const asOfMonth = latestOpeningStockMonth
+    ?? new Date().toISOString().slice(0, 7) as YearMonth;
   const options: ReplenishmentOptions = {
-    asOfMonth: latestMonth(openingStocks),
+    asOfMonth,
     defaultLeadTimeMonths: assumptions.defaultLeadTimeMonths,
     reviewPeriodMonths: assumptions.reviewPeriodMonths,
     categoryServiceLevel,
   };
-  return { monthlySales, openingStocks, inboundShipments, salesTransactions, minimumOrderQuantities, reservations, currentStocks, skuConfigs, options };
+  return {
+    monthlySales,
+    openingStocks,
+    inboundShipments,
+    salesTransactions,
+    minimumOrderQuantities,
+    reservations,
+    currentStocks,
+    skuConfigs,
+    options,
+    missingSources: Object.fromEntries(suppliers.map((data) => [data.supplier, [...(data.missingSources ?? [])]])),
+    asOfMonthSource: latestOpeningStockMonth ? "opening_stocks" : "current_date",
+  };
 }

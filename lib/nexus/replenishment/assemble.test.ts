@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { assembleReplenishmentInput, DEFAULT_ASSEMBLY_ASSUMPTIONS } from "./assemble.ts";
+import { calculateReplenishment } from "./calculation.ts";
 import type { SupplierParsedData } from "./assemble.ts";
 
 const supplier = (name: string, sku: string, month: "2026-08" | "2026-09", category?: string): SupplierParsedData => ({
@@ -46,4 +47,44 @@ test("assembly accepts explicit external growth and lead-time overrides", () => 
   });
   assert.equal(result.skuConfigs[0].forecastGrowthRate, 0.12);
   assert.equal(result.skuConfigs[0].leadTimeMonths, 3);
+});
+
+test("assembly carries missing-source disclosure without changing calculation input arrays", () => {
+  const partial = supplier("Новый поставщик", "SKU-1", "2026-09");
+  partial.inboundShipments = [];
+  partial.minimumOrderQuantities = [];
+  partial.missingSources = ["inbound", "moq"];
+  const result = assembleReplenishmentInput([partial]);
+
+  assert.deepEqual(result.missingSources, { "Новый поставщик": ["inbound", "moq"] });
+  assert.deepEqual(result.inboundShipments, []);
+  assert.deepEqual(result.minimumOrderQuantities, []);
+  assert.equal(result.asOfMonthSource, "opening_stocks");
+});
+
+test("assembly uses the current month when all suppliers provide only current stock snapshots", () => {
+  const currentOnly = supplier("Новый поставщик", "SKU-1", "2026-09");
+  currentOnly.openingStocks = [];
+  currentOnly.currentStocks = [{ sku: "SKU-1", currentStock: 17 }];
+  currentOnly.missingSources = ["openingStocks"];
+  const result = assembleReplenishmentInput([currentOnly]);
+
+  assert.equal(result.options.asOfMonth, new Date().toISOString().slice(0, 7));
+  assert.equal(result.asOfMonthSource, "current_date");
+});
+
+test("a supplier with sales, transactions and stock still calculates without inbound or MOQ", () => {
+  const partial = supplier("Тестовый поставщик", "SKU-1", "2026-09");
+  partial.inboundShipments = [];
+  partial.minimumOrderQuantities = [];
+  partial.missingSources = ["inbound", "moq"];
+
+  const assembled = assembleReplenishmentInput([partial]);
+  const plan = calculateReplenishment(assembled);
+  const recommendation = plan.suppliers[0].items[0];
+
+  assert.equal(recommendation.goodsInTransitWithinHorizon, 0);
+  assert.equal(recommendation.moqMultiple, null);
+  assert.ok(recommendation.recommendedOrder >= 0);
+  assert.deepEqual(assembled.missingSources["Тестовый поставщик"], ["inbound", "moq"]);
 });

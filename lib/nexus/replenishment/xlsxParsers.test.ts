@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as XLSX from "xlsx";
 import {
+  isMissingColumnError,
   parseInboundShipments,
   parseMonthlyOpeningStock,
   parseMonthlySales,
@@ -17,6 +18,14 @@ function workbookBytes(rows: unknown[][], sheetName = "Лист_1"): Uint8Array 
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), sheetName);
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
 }
+
+test("missing-column classifier recognizes only the two intentional parser signals", () => {
+  assert.equal(isMissingColumnError(new Error("Required XLSX headers were not found.")), true);
+  assert.equal(isMissingColumnError(new Error("Required column was not found: Остаток")), true);
+  assert.equal(isMissingColumnError(new Error("No monthly columns were found.")), false);
+  assert.equal(isMissingColumnError(new Error("Worksheet not found: Лист_2")), false);
+  assert.equal(isMissingColumnError("Required XLSX headers were not found."), false);
+});
 
 test("transaction parser normalizes both historical sign conventions and excludes non-sale documents", () => {
   const bytes = workbookBytes([

@@ -1,13 +1,21 @@
-import { DEFAULT_ASSEMBLY_ASSUMPTIONS, type AssemblyAssumptions, type SupplierParsedData } from "@/lib/nexus/replenishment/assemble";
-import type { ReplenishmentRecommendation } from "@/lib/nexus/replenishment/calculation";
-import type { ReplenishmentNarrationInput } from "@/lib/nexus/replenishment/narration";
 import {
-  parseInboundShipments, parseMinimumOrderQuantities, parseMonthlyOpeningStock, parseMonthlySales,
-  parseSalesTransactions, parseSkuCategories, parseSkuCurrentStocks, parseSkuReservations,
-} from "@/lib/nexus/replenishment/xlsxParsers";
+  DEFAULT_ASSEMBLY_ASSUMPTIONS,
+  type AssemblyAssumptions,
+  type ReplenishmentSourceKind,
+  type SupplierParsedData,
+} from "../../lib/nexus/replenishment/assemble.ts";
+import type { ReplenishmentRecommendation } from "../../lib/nexus/replenishment/calculation.ts";
+import type { ReplenishmentNarrationInput } from "../../lib/nexus/replenishment/narration.ts";
+import {
+  isMissingColumnError, parseInboundShipments, parseMinimumOrderQuantities, parseMonthlyOpeningStock,
+  parseMonthlySales, parseSalesTransactions, parseSkuCategories, parseSkuCostPrices,
+  parseSkuCurrentStocks, parseSkuReservations,
+} from "../../lib/nexus/replenishment/xlsxParsers.ts";
+import type { SkuCostPrice, XlsxInput } from "../../lib/nexus/replenishment/types.ts";
 
-export type FileKind = "transactions" | "monthlySales" | "openingStocks" | "inbound" | "moq";
-export type SupplierKey = "iek" | "systeme";
+export type FileKind = ReplenishmentSourceKind;
+export type SupplierKey = string;
+export type SupplierDefinition = { key: SupplierKey; name: string };
 export type FilesState = Record<SupplierKey, Partial<Record<FileKind, File>>>;
 export type ExceptionView = "all" | "urgent" | "anomaly" | "supply" | "surplus";
 export type ManagerDecision = { quantity: number; status: "draft" | "confirmed" };
@@ -22,17 +30,36 @@ export type PlanningControls = {
 };
 export type DataSource = "demo" | "own";
 
-export const FILE_FIELDS: Array<{ kind: FileKind; label: string; hint: string }> = [
-  { kind: "transactions", label: "Динамика продаж", hint: "Транзакции и накладные" },
-  { kind: "monthlySales", label: "Продажи по месяцам", hint: "Количество по SKU" },
-  { kind: "openingStocks", label: "Остатки по месяцам", hint: "Начальный остаток" },
-  { kind: "inbound", label: "Товар в пути", hint: "Поставки и категории" },
-  { kind: "moq", label: "MOQ / кратность", hint: "Шаг округления заказа" },
+export const FILE_FIELDS: Array<{ kind: FileKind; label: string; hint: string; missingTreatment: string }> = [
+  { kind: "transactions", label: "Динамика продаж", hint: "Транзакции и накладные", missingTreatment: "нет транзакций — разовые всплески не исключаются" },
+  { kind: "monthlySales", label: "Продажи по месяцам", hint: "Количество по SKU", missingTreatment: "нет помесячных продаж — рекомендации по спросу не формируются" },
+  { kind: "openingStocks", label: "Остатки по месяцам", hint: "Начальный остаток", missingTreatment: "нет помесячных остатков — используется снимок текущего остатка" },
+  { kind: "inbound", label: "Товар в пути", hint: "Поставки, остаток и категории", missingTreatment: "нет товара в пути — считается нулевым" },
+  { kind: "moq", label: "MOQ / кратность", hint: "Шаг округления заказа", missingTreatment: "нет MOQ — округление не применяется" },
 ];
-export const SUPPLIERS: Array<{ key: SupplierKey; name: string; code: string }> = [
-  { key: "iek", name: "IEK", code: "01" },
-  { key: "systeme", name: "Systeme Electric", code: "02" },
-];
+
+export const createInitialManualSuppliers = (): SupplierDefinition[] => [{ key: "supplier-1", name: "Поставщик 1" }];
+
+const CYRILLIC_SLUG: Record<string, string> = {
+  а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "y",
+  к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f",
+  х: "h", ц: "ts", ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya",
+};
+
+export function supplierKeyFromName(name: string, occupied: Iterable<string>): string {
+  const base = [...name.trim().toLocaleLowerCase("ru-RU")]
+    .map((character) => CYRILLIC_SLUG[character] ?? character)
+    .join("")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "supplier";
+  const used = new Set(occupied);
+  if (!used.has(base)) return base;
+  let suffix = 2;
+  while (used.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
+}
 
 export const DEFAULT_PLANNING: PlanningControls = {
   leadTimeMonths: DEFAULT_ASSEMBLY_ASSUMPTIONS.defaultLeadTimeMonths,
@@ -52,6 +79,7 @@ export const urgencyLabel = { high: "Срочно", medium: "Контроль", 
 export const urgencyRank = { high: 0, medium: 1, low: 2 } as const;
 export const demandPatternLabel = { stable: "Стабильный", volatile: "Волатильный", intermittent: "Прерывистый" } as const;
 export const lifecycleLabel = { active: "Активный", slow: "Медленный", dead: "Мёртвый запас" } as const;
+export const supplierSkuKey = (supplier: string, sku: string): string => `${supplier}\u0000${sku}`;
 export const exceptionViews: Array<{ key: ExceptionView; label: string }> = [
   { key: "all", label: "Все SKU" }, { key: "urgent", label: "Заказать сейчас" },
   { key: "anomaly", label: "Аномалии спроса" }, { key: "supply", label: "Риски поставки" },
@@ -76,6 +104,38 @@ export const csvCell = (value: string | number): string => `"${String(value).rep
 
 const yieldToBrowser = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
+type OptionalParser<T extends { sku: string }> = (input: XlsxInput) => T[];
+
+function optionalRowsFromBuffers<T extends { sku: string }>(
+  buffers: Partial<Record<FileKind, Uint8Array>>,
+  parser: OptionalParser<T>,
+): T[] {
+  // Dashboards/inbound sheets are the usual metadata carrier, so inspect them first. If they do not
+  // contain the requested column, continue through every supplied workbook as promised by the upload UI.
+  const candidates = Object.entries(buffers).sort(([left], [right]) => Number(right === "inbound") - Number(left === "inbound"));
+  for (const [, buffer] of candidates) {
+    if (!buffer) continue;
+    try {
+      const rows = parser(buffer);
+      if (rows.length) return rows;
+    } catch (error) {
+      if (isMissingColumnError(error)) continue;
+      throw error;
+    }
+  }
+  return [];
+}
+
+export class MissingStockSourceError extends Error {
+  readonly supplierKey: string;
+
+  constructor(supplierKey: string, supplierName: string) {
+    super(`Для поставщика «${supplierName}» нужен хотя бы один источник остатка: помесячные остатки или файл со столбцом «Остаток».`);
+    this.name = "MissingStockSourceError";
+    this.supplierKey = supplierKey;
+  }
+}
+
 /**
  * Pure composition of the five per-supplier parsers — shared by both the manual-upload and
  * demo-fetch paths. Real partner workbooks run to hundreds of thousands of rows (IEK's sales
@@ -84,51 +144,78 @@ const yieldToBrowser = (): Promise<void> => new Promise((resolve) => setTimeout(
  * five as one uninterrupted multi-second block that would freeze clicks and repaints entirely.
  */
 export async function buildSupplierParsedData(
-  key: SupplierKey,
-  buffers: Record<FileKind, Uint8Array>,
+  supplier: SupplierDefinition,
+  buffers: Partial<Record<FileKind, Uint8Array>>,
   onProgress?: (label: string) => void,
+  optionalSourceKinds?: FileKind[],
 ): Promise<SupplierParsedData> {
-  const supplierName = key === "iek" ? "IEK" : "Systeme Electric";
-
-  onProgress?.(`${supplierName}: динамика продаж…`);
-  const salesTransactions = parseSalesTransactions(buffers.transactions);
-  await yieldToBrowser();
-
-  onProgress?.(`${supplierName}: продажи по месяцам…`);
-  const monthlySales = parseMonthlySales(buffers.monthlySales);
-  await yieldToBrowser();
-
-  onProgress?.(`${supplierName}: остатки по месяцам…`);
-  const openingStocks = parseMonthlyOpeningStock(buffers.openingStocks);
-  await yieldToBrowser();
-
-  onProgress?.(`${supplierName}: товар в пути…`);
-  const inboundShipments = parseInboundShipments(buffers.inbound);
-  await yieldToBrowser();
-
-  onProgress?.(`${supplierName}: MOQ и кратность…`);
-  const minimumOrderQuantities = parseMinimumOrderQuantities(buffers.moq);
-  await yieldToBrowser();
-
-  let extras: Pick<SupplierParsedData, "categories" | "reservations" | "currentStocks"> = { reservations: [], currentStocks: [] };
-  if (key === "systeme") {
-    onProgress?.(`${supplierName}: категории, резервы, остатки…`);
-    extras = {
-      categories: parseSkuCategories(buffers.inbound),
-      reservations: parseSkuReservations(buffers.inbound),
-      currentStocks: parseSkuCurrentStocks(buffers.inbound),
-    };
+  const parseProvided = async <T,>(kind: FileKind, label: string, parser: (input: XlsxInput) => T[]): Promise<T[]> => {
+    const buffer = buffers[kind];
+    if (!buffer) return [];
+    onProgress?.(`${supplier.name}: ${label}…`);
+    const rows = parser(buffer);
     await yieldToBrowser();
+    return rows;
+  };
+
+  const salesTransactions = await parseProvided("transactions", "динамика продаж", parseSalesTransactions);
+  const monthlySales = await parseProvided("monthlySales", "продажи по месяцам", parseMonthlySales);
+  const openingStocks = await parseProvided("openingStocks", "остатки по месяцам", parseMonthlyOpeningStock);
+  const inboundShipments = await parseProvided("inbound", "товар в пути", parseInboundShipments);
+  const minimumOrderQuantities = await parseProvided("moq", "MOQ и кратность", parseMinimumOrderQuantities);
+
+  onProgress?.(`${supplier.name}: дополнительные поля…`);
+  const optionalBuffers = optionalSourceKinds
+    ? Object.fromEntries(optionalSourceKinds.flatMap((kind) => buffers[kind] ? [[kind, buffers[kind]]] : []))
+    : buffers;
+  const categories = optionalRowsFromBuffers(optionalBuffers, parseSkuCategories);
+  const reservations = optionalRowsFromBuffers(optionalBuffers, parseSkuReservations);
+  const currentStocks = optionalRowsFromBuffers(optionalBuffers, parseSkuCurrentStocks);
+  await yieldToBrowser();
+
+  if (!openingStocks.length && !currentStocks.length) {
+    throw new MissingStockSourceError(supplier.key, supplier.name);
   }
 
-  return { supplier: supplierName, salesTransactions, monthlySales, openingStocks, inboundShipments, minimumOrderQuantities, ...extras };
+  return {
+    supplier: supplier.name.trim(),
+    salesTransactions,
+    monthlySales,
+    openingStocks,
+    inboundShipments,
+    minimumOrderQuantities,
+    categories,
+    reservations,
+    currentStocks,
+    missingSources: FILE_FIELDS.filter((field) => !buffers[field.kind]).map((field) => field.kind),
+  };
 }
 
-/** Reads the 5 user-selected Files for one supplier and hands them to `buildSupplierParsedData`. */
-export async function parseSupplierFromFiles(key: SupplierKey, files: Partial<Record<FileKind, File>>, onProgress?: (label: string) => void): Promise<SupplierParsedData> {
-  for (const field of FILE_FIELDS) if (!files[field.kind]) throw new Error(`Не выбран файл «${field.label}» для ${key === "iek" ? "IEK" : "Systeme Electric"}.`);
-  const entries = await Promise.all(FILE_FIELDS.map(async (field) => [field.kind, new Uint8Array(await files[field.kind]!.arrayBuffer())] as const));
-  return buildSupplierParsedData(key, Object.fromEntries(entries) as Record<FileKind, Uint8Array>, onProgress);
+/** Reads only the files selected for one supplier; absent kinds remain explicit empty sources. */
+export async function parseSupplierFromFiles(
+  supplier: SupplierDefinition,
+  files: Partial<Record<FileKind, File>>,
+  onProgress?: (label: string) => void,
+): Promise<SupplierParsedData> {
+  const entries = await Promise.all(Object.entries(files).flatMap(([kind, file]) => file
+    ? [file.arrayBuffer().then((buffer) => [kind as FileKind, new Uint8Array(buffer)] as const)]
+    : []));
+  return buildSupplierParsedData(supplier, Object.fromEntries(entries), onProgress);
+}
+
+export async function parseSupplierCostPrices(files: Partial<Record<FileKind, File>>): Promise<SkuCostPrice[]> {
+  const entries = await Promise.all(Object.entries(files).flatMap(([kind, file]) => file
+    ? [file.arrayBuffer().then((buffer) => [kind as FileKind, new Uint8Array(buffer)] as const)]
+    : []));
+  return optionalRowsFromBuffers(Object.fromEntries(entries), parseSkuCostPrices);
+}
+
+export function parseSupplierCostPricesFromBuffers(buffers: Partial<Record<FileKind, Uint8Array>>): SkuCostPrice[] {
+  return optionalRowsFromBuffers(buffers, parseSkuCostPrices);
+}
+
+export function supplierMissingTreatments(files: Partial<Record<FileKind, unknown>>): string[] {
+  return FILE_FIELDS.filter((field) => !files[field.kind]).map((field) => field.missingTreatment);
 }
 
 export function buildAssumptions(planning: PlanningControls): AssemblyAssumptions {

@@ -7,7 +7,7 @@ import { AlertIcon, BoxIcon, ClockIcon, CoinIcon, SearchIcon } from "../icons";
 import { SupplierDispatch } from "../SupplierDispatch";
 import {
   demandPatternLabel, exceptionViews, explanation, lifecycleLabel, matchesExceptionView,
-  money, number, urgencyLabel, validManagerQuantity,
+  money, number, supplierSkuKey, urgencyLabel, validManagerQuantity,
   type ExceptionView, type ManagerDecision,
 } from "../shared";
 import styles from "../replenishment.module.css";
@@ -43,8 +43,8 @@ export function OrdersTab(props: {
   } = props;
 
   const allItems = plan.suppliers.flatMap((group) => group.items);
-  const pricedOrdering = allItems.filter((item) => item.recommendedOrder > 0 && costPrices.has(item.sku));
-  const knownOrderValue = pricedOrdering.reduce((sum, item) => sum + item.recommendedOrder * (costPrices.get(item.sku) ?? 0), 0);
+  const pricedOrdering = allItems.filter((item) => item.recommendedOrder > 0 && costPrices.has(supplierSkuKey(item.supplier, item.sku)));
+  const knownOrderValue = pricedOrdering.reduce((sum, item) => sum + item.recommendedOrder * (costPrices.get(supplierSkuKey(item.supplier, item.sku)) ?? 0), 0);
 
   return <>
     <div className={styles.sectionHead}>
@@ -88,7 +88,7 @@ export function OrdersTab(props: {
           const narrativeKey = `${item.supplier}:${item.sku}`;
           const decision = decisions[narrativeKey] ?? { quantity: item.recommendedOrder, status: "draft" as const };
           const { cls: pillCls, Icon: PillIcon } = URGENCY_PILL[item.urgency];
-          const costPrice = costPrices.get(item.sku);
+          const costPrice = costPrices.get(supplierSkuKey(item.supplier, item.sku));
           return <tr key={item.sku} ref={focusSku === item.sku ? (node) => node?.scrollIntoView({ block: "center", behavior: "smooth" }) : undefined}>
             <td>
               <span className={`${styles.pill} ${pillCls}`}><PillIcon size={12} />{urgencyLabel[item.urgency]}</span>

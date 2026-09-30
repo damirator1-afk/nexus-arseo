@@ -3,7 +3,7 @@
 import type { ReplenishmentPlan, ReplenishmentRecommendation } from "@/lib/nexus/replenishment/calculation";
 import type { PlanAggregate } from "@/lib/nexus/replenishment/planSelectors";
 import { AlertIcon, BoxIcon, ClockIcon, CoinIcon } from "../icons";
-import { money, number, urgencyLabel, urgencyRank, type DataSource } from "../shared";
+import { money, number, supplierSkuKey, urgencyLabel, urgencyRank, type DataSource } from "../shared";
 import styles from "../replenishment.module.css";
 
 const urgencyRankOf = (item: ReplenishmentRecommendation) => urgencyRank[item.urgency];
@@ -16,8 +16,8 @@ export function TodayTab(props: {
   onOpenSku: (sku: string) => void;
 }) {
   const { plan, summary, costPrices } = props;
-  const priced = plan.suppliers.flatMap((group) => group.items).filter((item) => item.recommendedOrder > 0 && costPrices.has(item.sku));
-  const knownOrderValue = priced.reduce((sum, item) => sum + item.recommendedOrder * (costPrices.get(item.sku) ?? 0), 0);
+  const priced = plan.suppliers.flatMap((group) => group.items).filter((item) => item.recommendedOrder > 0 && costPrices.has(supplierSkuKey(item.supplier, item.sku)));
+  const knownOrderValue = priced.reduce((sum, item) => sum + item.recommendedOrder * (costPrices.get(supplierSkuKey(item.supplier, item.sku)) ?? 0), 0);
   const orderingCount = plan.suppliers.flatMap((group) => group.items).filter((item) => item.recommendedOrder > 0).length;
   const attention = plan.suppliers
     .flatMap((group) => group.items)

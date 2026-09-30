@@ -90,6 +90,16 @@ function requireColumn(row: Cell[], patterns: RegExp[], label: string): number {
   return index;
 }
 
+/**
+ * Optional metadata can legitimately be absent from a supplier workbook. Callers may ignore only
+ * these two parser outcomes; corrupt workbooks and every other parsing failure must stay visible.
+ */
+export function isMissingColumnError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.startsWith("Required XLSX headers were not found.")
+    || error.message.startsWith("Required column was not found:");
+}
+
 function parseMonth(value: Cell): YearMonth | null {
   const normalized = key(value);
   const yearMatch = normalized.match(/\b(20\d{2})\b/);
