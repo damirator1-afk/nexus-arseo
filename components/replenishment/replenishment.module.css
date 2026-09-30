@@ -90,6 +90,7 @@
 .supplierCard h3 { margin: 1px 0 0; font-size: 16px; font-weight: 700; }
 .supplierCard small { color: var(--text-3); font-size: 11px; letter-spacing: .03em; text-transform: uppercase; }
 .fileList { padding: 8px; }
+.fileSource { border-radius: 8px; }
 .fileField { display: grid; grid-template-columns: 32px 1fr; gap: 12px; align-items: center; padding: 11px 10px; border-radius: 8px; cursor: pointer; transition: .15s; }
 .fileField:hover { background: var(--surface-2); }
 .fileField input { position: absolute; opacity: 0; pointer-events: none; }
@@ -99,6 +100,11 @@
 .fileField em { margin-left: 5px; color: var(--text-3); font-size: 10px; font-style: normal; font-weight: 500; letter-spacing: .02em; text-transform: uppercase; }
 .fileField small { margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 34vw; color: var(--text-3); }
 .loaded > span { background: var(--good-soft); border-color: var(--good); color: var(--good); }
+.selectedFiles { display: grid; gap: 5px; margin: -3px 10px 8px 54px; padding: 0; list-style: none; }
+.selectedFiles li { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); }
+.selectedFiles li > span { min-width: 0; overflow: hidden; color: var(--text-2); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.selectedFiles button { flex: none; border: 0; background: transparent; color: var(--text-3); padding: 2px 3px; font: inherit; font-size: 10.5px; cursor: pointer; }
+.selectedFiles button:hover { color: var(--crit); }
 
 .addSupplierRow { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface-2); }
 .addSupplierRow label { display: grid; gap: 6px; flex: 1; max-width: 430px; color: var(--text-3); font-size: 11.5px; }

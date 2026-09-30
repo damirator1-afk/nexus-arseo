@@ -32,14 +32,14 @@ const DEMO_FILENAMES: Record<DemoSupplierKey, Partial<Record<FileKind, string>>>
   },
 };
 
-export async function fetchDemoSupplierBuffers(key: DemoSupplierKey): Promise<Partial<Record<FileKind, Uint8Array>>> {
+export async function fetchDemoSupplierBuffers(key: DemoSupplierKey): Promise<Partial<Record<FileKind, Uint8Array[]>>> {
   const entries = await Promise.all(
     Object.entries(DEMO_FILENAMES[key]).map(async ([kind, filename]) => {
       const path = `/demo/replenishment/${DEMO_DIR[key]}/${filename}`;
       const response = await fetch(path);
       if (!response.ok) throw new Error(`Не удалось загрузить демо-файл ${filename} (HTTP ${response.status}).`);
-      return [kind as FileKind, new Uint8Array(await response.arrayBuffer())] as const;
+      return [kind as FileKind, [new Uint8Array(await response.arrayBuffer())]] as const;
     }),
   );
-  return Object.fromEntries(entries) as Partial<Record<FileKind, Uint8Array>>;
+  return Object.fromEntries(entries) as Partial<Record<FileKind, Uint8Array[]>>;
 }

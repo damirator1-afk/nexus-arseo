@@ -40,8 +40,25 @@ export function UploadGate(props: {
   const [newSupplierName, setNewSupplierName] = useState("");
   const normalizedNames = suppliers.map((supplier) => supplier.name.trim().toLocaleLowerCase("ru-RU"));
 
-  const setFile = (supplier: SupplierKey, kind: FileKind, file: File | undefined) => {
-    setFiles((current) => ({ ...current, [supplier]: { ...current[supplier], [kind]: file } }));
+  const addFiles = (supplier: SupplierKey, kind: FileKind, selected: File[]) => {
+    if (!selected.length) return;
+    setFiles((current) => {
+      const existing = current[supplier]?.[kind] ?? [];
+      const fingerprints = new Set(existing.map((file) => `${file.name}\u0000${file.size}\u0000${file.lastModified}`));
+      const additions = selected.filter((file) => !fingerprints.has(`${file.name}\u0000${file.size}\u0000${file.lastModified}`));
+      return { ...current, [supplier]: { ...current[supplier], [kind]: [...existing, ...additions] } };
+    });
+    setSupplierErrors((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== supplier)));
+  };
+
+  const removeFile = (supplier: SupplierKey, kind: FileKind, index: number) => {
+    setFiles((current) => ({
+      ...current,
+      [supplier]: {
+        ...current[supplier],
+        [kind]: (current[supplier]?.[kind] ?? []).filter((_, fileIndex) => fileIndex !== index),
+      },
+    }));
     setSupplierErrors((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== supplier)));
   };
 
@@ -98,7 +115,7 @@ export function UploadGate(props: {
 
       <div className={styles.supplierGrid}>{suppliers.map((supplier, index) => {
         const supplierFiles = files[supplier.key] ?? {};
-        const loadedFields = FILE_FIELDS.filter((field) => supplierFiles[field.kind]);
+        const loadedFields = FILE_FIELDS.filter((field) => supplierFiles[field.kind]?.length);
         const missingTreatments = supplierMissingTreatments(supplierFiles);
         const normalizedName = supplier.name.trim().toLocaleLowerCase("ru-RU");
         const nameError = !normalizedName
@@ -119,17 +136,37 @@ export function UploadGate(props: {
           </header>
 
           <div className={styles.fileList}>{FILE_FIELDS.map((field) => {
-            const file = supplierFiles[field.kind];
-            return <label className={`${styles.fileField} ${file ? styles.loaded : ""}`} key={field.kind}>
-              <input type="file" accept=".xlsx,.xls" onChange={(event) => setFile(supplier.key, field.kind, event.target.files?.[0])} />
-              <span>{file ? "✓" : "+"}</span>
-              <div><b>{field.label} <em>опционально</em></b><small>{file?.name ?? field.hint}</small></div>
-            </label>;
+            const kindFiles = supplierFiles[field.kind] ?? [];
+            return <div className={styles.fileSource} key={field.kind}>
+              <label className={`${styles.fileField} ${kindFiles.length ? styles.loaded : ""}`}>
+                <input
+                  type="file"
+                  multiple
+                  accept=".xlsx,.xls"
+                  onChange={(event) => {
+                    addFiles(supplier.key, field.kind, Array.from(event.currentTarget.files ?? []));
+                    event.currentTarget.value = "";
+                  }}
+                />
+                <span>{kindFiles.length ? "✓" : "+"}</span>
+                <div>
+                  <b>{field.label} <em>опционально</em></b>
+                  <small>{kindFiles.length ? `${kindFiles.length} файл(ов) выбрано` : field.hint}</small>
+                </div>
+              </label>
+              {kindFiles.length > 0 && <ul className={styles.selectedFiles}>{kindFiles.map((file, fileIndex) => <li key={`${file.name}-${file.size}-${file.lastModified}-${fileIndex}`}>
+                <span title={file.name}>{file.name}</span>
+                <button type="button" aria-label={`Убрать файл ${file.name}`} onClick={() => removeFile(supplier.key, field.kind, fileIndex)}>Убрать</button>
+              </li>)}</ul>}
+            </div>;
           })}</div>
 
           <div className={styles.sourceSummary}>
             <b>Сводка перед расчётом</b>
-            <p><span className={styles.sourcePresent}>Есть:</span> {loadedFields.length ? loadedFields.map((field) => field.label).join(", ") : "файлы пока не выбраны"}</p>
+            <p><span className={styles.sourcePresent}>Есть:</span> {loadedFields.length ? loadedFields.map((field) => {
+              const count = supplierFiles[field.kind]?.length ?? 0;
+              return `${field.label}${count > 1 ? ` (${count} файла)` : ""}`;
+            }).join(", ") : "файлы пока не выбраны"}</p>
             {missingTreatments.map((treatment) => <p key={treatment}><span className={styles.sourceMissing}>Пробел:</span> {treatment}</p>)}
           </div>
 

@@ -104,6 +104,40 @@ test("grouped 1C report rejects a period spanning more than one calendar month",
   );
 });
 
+test("grouped 1C report finds the real header even when a second 'Количество' block sits lower in the sheet and earlier in !merges", () => {
+  // Regression test: a real partner export repeated "Количество" for a second, unrelated by-product
+  // summary further down the sheet. !merges is not guaranteed to be in document order, so the decoy
+  // (listed first in !merges, but on a later row) must not be picked over the real header above the data.
+  const rows: unknown[][] = [
+    [null, null, null, "Период: 01.09.2026 - 30.09.2026"],
+    [],
+    ["Подразделение", null, null, null, null, null, null, "Выручка", null, null, "Валовая прибыль", null, "Количество"],
+    ["Клиент.Адрес"],
+    ["Клиент"],
+    ["Номенклатура, Артикул"],
+    ["Клиент Альфа", null, null, null, null, null, null, null, null, null, null, null, 100],
+    ["Ирис, карамельный DUMLE, SKU-1", null, null, null, null, null, null, null, null, null, null, null, 10],
+    [],
+    ["По товарам (итого)"],
+    ["Номенклатура", null, null, null, null, null, null, null, null, null, null, null, null, null, "Количество"],
+    ["Ирис, карамельный DUMLE", null, null, null, null, null, null, null, null, null, null, null, null, null, 999],
+  ];
+  const worksheet = XLSX.utils.aoa_to_sheet(rows);
+  worksheet["!rows"] = rows.map((_, index) => (index === 6 ? { level: 2 } : index === 7 ? { level: 3 } : {}));
+  worksheet["!merges"] = [
+    // Decoy header listed first in the array, even though it sits on a later row.
+    { s: { r: 9, c: 14 }, e: { r: 9, c: 14 } },
+    { s: { r: 2, c: 12 }, e: { r: 5, c: 13 } },
+  ];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Отчёт");
+  const bytes = XLSX.write(workbook, { type: "buffer", bookType: "xlsx", cellStyles: true });
+
+  assert.deepEqual(parseGroupedMonthlyReport(bytes), [
+    { sku: "SKU-1", productName: "Ирис, карамельный DUMLE", month: "2026-09", unitsSold: 10 },
+  ]);
+});
+
 test("bare month needs an explicit assumed year", () => {
   assert.equal(parseMonth("07"), null);
   assert.equal(parseMonth("07", 2026), "2026-07");

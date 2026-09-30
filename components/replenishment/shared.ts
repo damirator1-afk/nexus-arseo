@@ -11,12 +11,12 @@ import {
   parseGroupedMonthlyReport, parseMonthlySales, parseSalesTransactions, parseSkuCategories, parseSkuCostPrices,
   parseSkuCurrentStocks, parseSkuReservations, parseSkuStockBatches,
 } from "../../lib/nexus/replenishment/xlsxParsers.ts";
-import type { SkuCostPrice, XlsxInput } from "../../lib/nexus/replenishment/types.ts";
+import type { MonthlyOpeningStock, MonthlySales, SkuCostPrice, XlsxInput } from "../../lib/nexus/replenishment/types.ts";
 
 export type FileKind = ReplenishmentSourceKind;
 export type SupplierKey = string;
 export type SupplierDefinition = { key: SupplierKey; name: string };
-export type FilesState = Record<SupplierKey, Partial<Record<FileKind, File>>>;
+export type FilesState = Record<SupplierKey, Partial<Record<FileKind, File[]>>>;
 export type ExceptionView = "all" | "urgent" | "anomaly" | "supply" | "surplus";
 export type ManagerDecision = { quantity: number; status: "draft" | "confirmed" };
 export type PlanningControls = {
@@ -114,23 +114,39 @@ const yieldToBrowser = (): Promise<void> => new Promise((resolve) => setTimeout(
 type OptionalParser<T extends { sku: string }> = (input: XlsxInput) => T[];
 
 function optionalRowsFromBuffers<T extends { sku: string }>(
-  buffers: Partial<Record<FileKind, Uint8Array>>,
+  buffers: Partial<Record<FileKind, Uint8Array[]>>,
   parser: OptionalParser<T>,
 ): T[] {
   // Dashboards/inbound sheets are the usual metadata carrier, so inspect them first. If they do not
   // contain the requested column, continue through every supplied workbook as promised by the upload UI.
-  const candidates = Object.entries(buffers).sort(([left], [right]) => Number(right === "inbound") - Number(left === "inbound"));
+  const candidates = Object.entries(buffers)
+    .flatMap(([kind, kindBuffers]) => (kindBuffers ?? []).map((buffer) => [kind as FileKind, buffer] as const))
+    .sort(([left], [right]) => Number(right === "inbound") - Number(left === "inbound"));
+  const collected: T[] = [];
   for (const [, buffer] of candidates) {
-    if (!buffer) continue;
     try {
       const rows = parser(buffer);
-      if (rows.length) return rows;
+      for (const row of rows) collected.push(row);
     } catch (error) {
       if (isMissingColumnError(error)) continue;
       throw error;
     }
   }
-  return [];
+  return collected;
+}
+
+function aggregateMonthlyRows<T extends { sku: string; month: string }>(
+  rows: T[],
+  valueOf: (row: T) => number,
+  withValue: (row: T, value: number) => T,
+): T[] {
+  const aggregated = new Map<string, T>();
+  for (const row of rows) {
+    const mapKey = `${row.sku}\u0000${row.month}`;
+    const current = aggregated.get(mapKey);
+    aggregated.set(mapKey, current ? withValue(current, valueOf(current) + valueOf(row)) : row);
+  }
+  return [...aggregated.values()];
 }
 
 export class MissingStockSourceError extends Error {
@@ -152,30 +168,32 @@ export class MissingStockSourceError extends Error {
  */
 export async function buildSupplierParsedData(
   supplier: SupplierDefinition,
-  buffers: Partial<Record<FileKind, Uint8Array>>,
+  buffers: Partial<Record<FileKind, Uint8Array[]>>,
   onProgress?: (label: string) => void,
   optionalSourceKinds?: FileKind[],
   assumedYearForBareMonths?: number,
 ): Promise<SupplierParsedData> {
   const parseProvided = async <T,>(kind: FileKind, label: string, parser: (input: XlsxInput) => T[]): Promise<T[]> => {
-    const buffer = buffers[kind];
-    if (!buffer) return [];
-    onProgress?.(`${supplier.name}: ${label}…`);
-    let rows: T[];
-    try {
-      rows = parser(buffer);
-    } catch (error) {
-      const reason = isMissingColumnError(error)
-        ? "не нашли ожидаемые колонки — проверьте, что это тот файл и в нём есть нужные заголовки (артикул/код 1С, дата, количество и т.д.)"
-        : error instanceof Error ? error.message : "не удалось прочитать файл";
-      throw new Error(`Поставщик «${supplier.name}», файл «${label}»: ${reason}.`);
+    const kindBuffers = buffers[kind] ?? [];
+    const collected: T[] = [];
+    for (const [index, buffer] of kindBuffers.entries()) {
+      onProgress?.(`${supplier.name}: ${label}${kindBuffers.length > 1 ? ` (${index + 1}/${kindBuffers.length})` : ""}…`);
+      try {
+        for (const row of parser(buffer)) collected.push(row);
+      } catch (error) {
+        const reason = isMissingColumnError(error)
+          ? "не нашли ожидаемые колонки — проверьте, что это тот файл и в нём есть нужные заголовки (артикул/код 1С, дата, количество и т.д.)"
+          : error instanceof Error ? error.message : "не удалось прочитать файл";
+        const fileNumber = kindBuffers.length > 1 ? ` №${index + 1}` : "";
+        throw new Error(`Поставщик «${supplier.name}», файл «${label}${fileNumber}»: ${reason}.`);
+      }
+      await yieldToBrowser();
     }
-    await yieldToBrowser();
-    return rows;
+    return collected;
   };
 
   const salesTransactions = await parseProvided("transactions", "динамика продаж", parseSalesTransactions);
-  const monthlySales = await parseProvided("monthlySales", "продажи по месяцам", (input) => {
+  const monthlySalesRows = await parseProvided<MonthlySales>("monthlySales", "продажи по месяцам", (input) => {
     try {
       return parseMonthlySales(input, undefined, assumedYearForBareMonths);
     } catch (ordinaryError) {
@@ -189,16 +207,18 @@ export async function buildSupplierParsedData(
       }
     }
   });
-  const openingStocks = await parseProvided("openingStocks", "остатки по месяцам", (input) => (
+  const monthlySales = aggregateMonthlyRows(monthlySalesRows, (row) => row.unitsSold, (row, unitsSold) => ({ ...row, unitsSold }));
+  const openingStockRows = await parseProvided<MonthlyOpeningStock>("openingStocks", "остатки по месяцам", (input) => (
     parseMonthlyOpeningStock(input, undefined, assumedYearForBareMonths)
   ));
+  const openingStocks = aggregateMonthlyRows(openingStockRows, (row) => row.openingStock, (row, openingStock) => ({ ...row, openingStock }));
   const inboundShipments = await parseProvided("inbound", "товар в пути", parseInboundShipments);
   const minimumOrderQuantities = await parseProvided("moq", "MOQ и кратность", parseMinimumOrderQuantities);
   const stockBatches = await parseProvided("stockBatches", "остатки по партиям", parseSkuStockBatches);
 
   onProgress?.(`${supplier.name}: дополнительные поля…`);
   const optionalBuffers = optionalSourceKinds
-    ? Object.fromEntries(optionalSourceKinds.flatMap((kind) => buffers[kind] ? [[kind, buffers[kind]]] : []))
+    ? Object.fromEntries(optionalSourceKinds.flatMap((kind) => buffers[kind]?.length ? [[kind, buffers[kind]]] : []))
     : buffers;
   const categories = optionalRowsFromBuffers(optionalBuffers, parseSkuCategories);
   const reservations = optionalRowsFromBuffers(optionalBuffers, parseSkuReservations);
@@ -220,36 +240,38 @@ export async function buildSupplierParsedData(
     reservations,
     currentStocks,
     stockBatches,
-    missingSources: FILE_FIELDS.filter((field) => !buffers[field.kind]).map((field) => field.kind),
+    missingSources: FILE_FIELDS.filter((field) => !buffers[field.kind]?.length).map((field) => field.kind),
   };
+}
+
+async function fileArraysToBuffers(files: Partial<Record<FileKind, File[]>>): Promise<Partial<Record<FileKind, Uint8Array[]>>> {
+  const entries = await Promise.all(Object.entries(files).map(async ([kind, kindFiles]) => [
+    kind as FileKind,
+    await Promise.all((kindFiles ?? []).map(async (file) => new Uint8Array(await file.arrayBuffer()))),
+  ] as const));
+  return Object.fromEntries(entries);
 }
 
 /** Reads only the files selected for one supplier; absent kinds remain explicit empty sources. */
 export async function parseSupplierFromFiles(
   supplier: SupplierDefinition,
-  files: Partial<Record<FileKind, File>>,
+  files: Partial<Record<FileKind, File[]>>,
   onProgress?: (label: string) => void,
   assumedYearForBareMonths?: number,
 ): Promise<SupplierParsedData> {
-  const entries = await Promise.all(Object.entries(files).flatMap(([kind, file]) => file
-    ? [file.arrayBuffer().then((buffer) => [kind as FileKind, new Uint8Array(buffer)] as const)]
-    : []));
-  return buildSupplierParsedData(supplier, Object.fromEntries(entries), onProgress, undefined, assumedYearForBareMonths);
+  return buildSupplierParsedData(supplier, await fileArraysToBuffers(files), onProgress, undefined, assumedYearForBareMonths);
 }
 
-export async function parseSupplierCostPrices(files: Partial<Record<FileKind, File>>): Promise<SkuCostPrice[]> {
-  const entries = await Promise.all(Object.entries(files).flatMap(([kind, file]) => file
-    ? [file.arrayBuffer().then((buffer) => [kind as FileKind, new Uint8Array(buffer)] as const)]
-    : []));
-  return optionalRowsFromBuffers(Object.fromEntries(entries), parseSkuCostPrices);
+export async function parseSupplierCostPrices(files: Partial<Record<FileKind, File[]>>): Promise<SkuCostPrice[]> {
+  return optionalRowsFromBuffers(await fileArraysToBuffers(files), parseSkuCostPrices);
 }
 
-export function parseSupplierCostPricesFromBuffers(buffers: Partial<Record<FileKind, Uint8Array>>): SkuCostPrice[] {
+export function parseSupplierCostPricesFromBuffers(buffers: Partial<Record<FileKind, Uint8Array[]>>): SkuCostPrice[] {
   return optionalRowsFromBuffers(buffers, parseSkuCostPrices);
 }
 
-export function supplierMissingTreatments(files: Partial<Record<FileKind, unknown>>): string[] {
-  return FILE_FIELDS.filter((field) => !files[field.kind]).map((field) => field.missingTreatment);
+export function supplierMissingTreatments(files: Partial<Record<FileKind, readonly unknown[]>>): string[] {
+  return FILE_FIELDS.filter((field) => !files[field.kind]?.length).map((field) => field.missingTreatment);
 }
 
 export function buildAssumptions(planning: PlanningControls): AssemblyAssumptions {

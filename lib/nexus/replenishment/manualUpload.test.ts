@@ -39,20 +39,20 @@ test("manual supplier slug is derived from its name and remains unique", () => {
 
 test("three of six supplier files parse and disclose missing inbound, MOQ and batch stock", async () => {
   const parsed = await buildSupplierParsedData({ key: "alpha", name: "Альфа" }, {
-    transactions: workbookBytes([
+    transactions: [workbookBytes([
       ["Дата", "Номер", "Документ", "Код", "Номенклатура", "Количество"],
       ["01.09.2026", "INV-1", "Продажа", "SKU-1", "Автомат", -5],
-    ]),
-    monthlySales: workbookBytes([
+    ])],
+    monthlySales: [workbookBytes([
       ["Номенклатура", "Номенклатурн.код", "сент. 2026"],
       [null, null, "Количество"],
       ["Автомат", "SKU-1", 5],
-    ]),
-    openingStocks: workbookBytes([
+    ])],
+    openingStocks: [workbookBytes([
       ["Номенклатура", "Номенклатурн.код", "сент. 2026"],
       [null, null, "нач. остаток"],
       ["Автомат", "SKU-1", 12],
-    ]),
+    ])],
   });
 
   assert.equal(parsed.supplier, "Альфа");
@@ -65,10 +65,10 @@ test("three of six supplier files parse and disclose missing inbound, MOQ and ba
 
 test("current stock embedded in an arbitrary supplier dashboard satisfies the stock-source rule", async () => {
   const parsed = await buildSupplierParsedData({ key: "beta", name: "Бета" }, {
-    inbound: workbookBytes([
+    inbound: [workbookBytes([
       ["Код 1с", "Наименование", "Категория 2026", "Остаток", "Зарезервировано", "СЭ в пути 30.09"],
       ["SKU-1", "Автомат", "A", 20, 3, 0],
-    ]),
+    ])],
   });
 
   assert.deepEqual(parsed.currentStocks, [{ sku: "SKU-1", currentStock: 20 }]);
@@ -79,12 +79,12 @@ test("current stock embedded in an arbitrary supplier dashboard satisfies the st
 
 test("manual monthly-sales upload falls back automatically to a grouped 1C report", async () => {
   const parsed = await buildSupplierParsedData({ key: "grouped", name: "Группированный" }, {
-    monthlySales: groupedMonthlyReportBytes(),
-    openingStocks: workbookBytes([
+    monthlySales: [groupedMonthlyReportBytes()],
+    openingStocks: [workbookBytes([
       ["Номенклатура", "Артикул", "сент. 2026"],
       [null, null, "нач. остаток"],
       ["Автомат", "SKU-1", 25],
-    ]),
+    ])],
   });
 
   assert.deepEqual(parsed.monthlySales, [
@@ -95,14 +95,65 @@ test("manual monthly-sales upload falls back automatically to a grouped 1C repor
 test("supplier without opening or current stock fails with a targeted validation error", async () => {
   await assert.rejects(
     buildSupplierParsedData({ key: "gamma", name: "Гамма" }, {
-      monthlySales: workbookBytes([
+      monthlySales: [workbookBytes([
         ["Номенклатура", "Номенклатурн.код", "сент. 2026"],
         [null, null, "Количество"],
         ["Автомат", "SKU-1", 5],
-      ]),
+      ])],
     }),
     (error: unknown) => error instanceof MissingStockSourceError
       && error.supplierKey === "gamma"
       && /нужен хотя бы один источник остатка/u.test(error.message),
   );
+});
+
+test("multiple monthly-sales files preserve the same SKU in different months", async () => {
+  const parsed = await buildSupplierParsedData({ key: "multi-month", name: "Несколько месяцев" }, {
+    monthlySales: [
+      workbookBytes([
+        ["Номенклатура", "Артикул", "янв. 2026"],
+        [null, null, "Количество"],
+        ["Автомат", "SKU-1", 5],
+      ]),
+      workbookBytes([
+        ["Номенклатура", "Артикул", "февр. 2026"],
+        [null, null, "Количество"],
+        ["Автомат", "SKU-1", 7],
+      ]),
+    ],
+    openingStocks: [workbookBytes([
+      ["Номенклатура", "Артикул", "февр. 2026"],
+      [null, null, "нач. остаток"],
+      ["Автомат", "SKU-1", 20],
+    ])],
+  });
+
+  assert.deepEqual(parsed.monthlySales, [
+    { sku: "SKU-1", productName: "Автомат", month: "2026-01", unitsSold: 5 },
+    { sku: "SKU-1", productName: "Автомат", month: "2026-02", unitsSold: 7 },
+  ]);
+});
+
+test("duplicate SKU-month rows from separate sales and stock files are summed exactly once", async () => {
+  const monthlyFile = (units: number) => workbookBytes([
+    ["Номенклатура", "Артикул", "март 2026"],
+    [null, null, "Количество"],
+    ["Автомат", "SKU-1", units],
+  ]);
+  const stockFile = (stock: number) => workbookBytes([
+    ["Номенклатура", "Артикул", "март 2026"],
+    [null, null, "нач. остаток"],
+    ["Автомат", "SKU-1", stock],
+  ]);
+  const parsed = await buildSupplierParsedData({ key: "overlap", name: "Пересечение" }, {
+    monthlySales: [monthlyFile(5), monthlyFile(7)],
+    openingStocks: [stockFile(10), stockFile(4)],
+  });
+
+  assert.deepEqual(parsed.monthlySales, [
+    { sku: "SKU-1", productName: "Автомат", month: "2026-03", unitsSold: 12 },
+  ]);
+  assert.deepEqual(parsed.openingStocks, [
+    { sku: "SKU-1", productName: "Автомат", month: "2026-03", openingStock: 14 },
+  ]);
 });

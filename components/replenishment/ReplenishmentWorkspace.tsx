@@ -58,10 +58,12 @@ export function ReplenishmentWorkspace() {
   const [decisions, setDecisions] = useState<Record<string, ManagerDecision>>({});
   const [planning, setPlanning] = useState<PlanningControls>(DEFAULT_PLANNING);
 
-  const selectedCount = suppliers.flatMap((supplier) => Object.values(files[supplier.key] ?? {})).filter(Boolean).length;
+  const selectedCount = suppliers.reduce((total, supplier) => (
+    total + Object.values(files[supplier.key] ?? {}).reduce((count, kindFiles) => count + (kindFiles?.length ?? 0), 0)
+  ), 0);
   const normalizedNames = suppliers.map((supplier) => supplier.name.trim().toLocaleLowerCase("ru-RU"));
   const ready = suppliers.length > 0
-    && suppliers.every((supplier) => supplier.name.trim() && Object.values(files[supplier.key] ?? {}).some(Boolean))
+    && suppliers.every((supplier) => supplier.name.trim() && Object.values(files[supplier.key] ?? {}).some((kindFiles) => Boolean(kindFiles?.length)))
     && new Set(normalizedNames).size === normalizedNames.length
     && !Object.keys(supplierErrors).length;
 

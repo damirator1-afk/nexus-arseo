@@ -307,9 +307,12 @@ export function parseGroupedMonthlyReport(input: XlsxInput, sheetName?: string):
   if (monthNumber < 1 || monthNumber > 12) throw new Error("В периоде отчёта указан некорректный месяц.");
   const month = `${startYear}-${startMonth}` as YearMonth;
 
-  const quantityMerge = (worksheet["!merges"] ?? []).find((merge) => (
-    QUANTITY_PATTERNS.some((pattern) => pattern.test(key(cellAt(merge.s.r, merge.s.c))))
-  ));
+  // `!merges` is not guaranteed to be in document order — some reports repeat a "Количество" header
+  // further down for a second sub-table (e.g. a by-product summary after the by-client breakdown).
+  // Take the topmost (then leftmost) match, which is the real header for this report's main grouping.
+  const quantityMerge = (worksheet["!merges"] ?? [])
+    .filter((merge) => QUANTITY_PATTERNS.some((pattern) => pattern.test(key(cellAt(merge.s.r, merge.s.c)))))
+    .sort((a, b) => a.s.r - b.s.r || a.s.c - b.s.c)[0];
   if (!quantityMerge) throw new Error("Не удалось найти объединённый заголовок колонки «Количество».");
 
   const rowMetadata = worksheet["!rows"];
