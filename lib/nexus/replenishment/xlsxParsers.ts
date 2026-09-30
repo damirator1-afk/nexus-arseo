@@ -283,7 +283,20 @@ export function parseMonthlyOpeningStock(input: XlsxInput, sheetName?: string, a
  * parsers this must retain worksheet outline and merge metadata, hence the direct SheetJS access and
  * `cellStyles: true` below.
  */
-export function parseGroupedMonthlyReport(input: XlsxInput, sheetName?: string): MonthlySales[] {
+export interface GroupedMonthlyRow {
+  sku: string | null;
+  productName: string;
+  month: YearMonth;
+  unitsSold: number;
+}
+
+/**
+ * Raw grouped-report parser. Rows whose source report has no SKU remain explicit (`sku: null`) so a
+ * caller can reconcile them against coded files from the same supplier without guessing. The public
+ * `parseGroupedMonthlyReport` wrapper below deliberately preserves its historical `MonthlySales[]`
+ * contract for callers that cannot perform that supplier-scoped reconciliation.
+ */
+export function parseGroupedMonthlyReportRows(input: XlsxInput, sheetName?: string): GroupedMonthlyRow[] {
   const workbook = XLSX.read(input, { type: "array", cellDates: true, cellStyles: true });
   const selected = sheetName ?? workbook.SheetNames[0];
   const worksheet = selected ? workbook.Sheets[selected] : undefined;
@@ -293,30 +306,68 @@ export function parseGroupedMonthlyReport(input: XlsxInput, sheetName?: string):
   const cellAt = (row: number, column: number): Cell => worksheet[XLSX.utils.encode_cell({ r: row, c: column })]?.v as Cell;
   const periodPattern = /период:?\s*(\d{2})\.(\d{2})\.(\d{4})\s*-\s*(\d{2})\.(\d{2})\.(\d{4})/iu;
   let periodMatch: RegExpMatchArray | null = null;
+  let month: YearMonth | null = null;
+  let monthCell: { row: number; column: number } | null = null;
   for (let row = range.s.r; row <= Math.min(range.e.r, 14) && !periodMatch; row += 1) {
     for (let column = range.s.c; column <= range.e.c && !periodMatch; column += 1) {
       periodMatch = text(cellAt(row, column)).match(periodPattern);
     }
   }
-  if (!periodMatch) throw new Error("Не удалось найти период отчёта в первых 15 строках.");
-  const [, , startMonth, startYear, , endMonth, endYear] = periodMatch;
-  if (startMonth !== endMonth || startYear !== endYear) {
-    throw new Error("Отчёт охватывает больше одного месяца, такой файл пока не поддерживается для этого источника.");
+  if (periodMatch) {
+    const [, , startMonth, startYear, , endMonth, endYear] = periodMatch;
+    if (startMonth !== endMonth || startYear !== endYear) {
+      throw new Error("Отчёт охватывает больше одного месяца, такой файл пока не поддерживается для этого источника.");
+    }
+    const monthNumber = Number(startMonth);
+    if (monthNumber < 1 || monthNumber > 12) throw new Error("В периоде отчёта указан некорректный месяц.");
+    month = `${startYear}-${startMonth}` as YearMonth;
+  } else {
+    // Some customer exports expose the month only as a merged cell such as "март 2026". Reuse the
+    // same month vocabulary as every other parser and retain its position to select the quantity
+    // column that belongs to this month rather than the duplicate "Итого" block beside it.
+    for (let row = range.s.r; row <= Math.min(range.e.r, 14) && !month; row += 1) {
+      for (let column = range.s.c; column <= range.e.c && !month; column += 1) {
+        const parsed = parseMonth(cellAt(row, column));
+        if (parsed) {
+          month = parsed;
+          monthCell = { row, column };
+        }
+      }
+    }
   }
-  const monthNumber = Number(startMonth);
-  if (monthNumber < 1 || monthNumber > 12) throw new Error("В периоде отчёта указан некорректный месяц.");
-  const month = `${startYear}-${startMonth}` as YearMonth;
+  if (!month) throw new Error("Не удалось найти период отчёта в первых 15 строках.");
 
   // `!merges` is not guaranteed to be in document order — some reports repeat a "Количество" header
   // further down for a second sub-table (e.g. a by-product summary after the by-client breakdown).
   // Take the topmost (then leftmost) match, which is the real header for this report's main grouping.
-  const quantityMerge = (worksheet["!merges"] ?? [])
+  let quantityHeader = (worksheet["!merges"] ?? [])
     .filter((merge) => QUANTITY_PATTERNS.some((pattern) => pattern.test(key(cellAt(merge.s.r, merge.s.c)))))
     .sort((a, b) => a.s.r - b.s.r || a.s.c - b.s.c)[0];
-  if (!quantityMerge) throw new Error("Не удалось найти объединённый заголовок колонки «Количество».");
+  if (!quantityHeader) {
+    // The no-SKU report keeps "Количество" as a plain cell. Prefer the occurrence underneath the
+    // detected month's merged header; the same sheet also carries a second quantity under "Итого".
+    const monthMerge = monthCell && (worksheet["!merges"] ?? []).find((merge) => (
+      monthCell.row >= merge.s.r && monthCell.row <= merge.e.r
+      && monthCell.column >= merge.s.c && monthCell.column <= merge.e.c
+    ));
+    const candidates: Array<{ s: { r: number; c: number }; e: { r: number; c: number } }> = [];
+    for (let row = range.s.r; row <= Math.min(range.e.r, 19); row += 1) {
+      for (let column = range.s.c; column <= range.e.c; column += 1) {
+        if (QUANTITY_PATTERNS.some((pattern) => pattern.test(key(cellAt(row, column))))) {
+          candidates.push({ s: { r: row, c: column }, e: { r: row, c: column } });
+        }
+      }
+    }
+    quantityHeader = candidates.sort((left, right) => {
+      const leftUnderMonth = monthMerge && left.s.c >= monthMerge.s.c && left.s.c <= monthMerge.e.c ? 1 : 0;
+      const rightUnderMonth = monthMerge && right.s.c >= monthMerge.s.c && right.s.c <= monthMerge.e.c ? 1 : 0;
+      return rightUnderMonth - leftUnderMonth || left.s.r - right.s.r || left.s.c - right.s.c;
+    })[0];
+  }
+  if (!quantityHeader) throw new Error("Не удалось найти заголовок колонки «Количество».");
 
   const rowMetadata = worksheet["!rows"];
-  const dataStart = quantityMerge.e.r + 1;
+  const dataStart = quantityHeader.e.r + 1;
   let leafLevel: number | undefined;
   for (let row = dataStart; row <= range.e.r; row += 1) {
     const level = rowMetadata?.[row]?.level;
@@ -324,23 +375,41 @@ export function parseGroupedMonthlyReport(input: XlsxInput, sheetName?: string):
   }
   if (leafLevel === undefined) throw new Error("Не удалось определить уровни группировки строк отчёта.");
 
-  const aggregated = new Map<string, MonthlySales>();
+  const headerValues: string[] = [];
+  for (let row = range.s.r; row < dataStart; row += 1) {
+    for (let column = range.s.c; column <= range.e.c; column += 1) headerValues.push(key(cellAt(row, column)));
+  }
+  const explicitlyCoded = headerValues.some((value) => value.includes("номенклатура") && (value.includes("артикул") || value.includes("код")));
+  const explicitlyUncoded = headerValues.some((value) => value === "номенклатура");
+  // If a recognizable header explicitly says only "Номенклатура", commas belong to the product
+  // name (for example "конфеты, 150 г") and must never be reinterpreted as an SKU.
+  const splitSkuFromLabel = explicitlyCoded || !explicitlyUncoded;
+
+  const parsed: GroupedMonthlyRow[] = [];
   for (let row = dataStart; row <= range.e.r; row += 1) {
     if (rowMetadata?.[row]?.level !== leafLevel) continue;
     let label = "";
     for (let column = range.s.c; column <= range.e.c && !label; column += 1) label = text(cellAt(row, column));
-    const separator = label.lastIndexOf(",");
-    if (separator < 0) continue;
-    const productName = label.slice(0, separator).trim();
-    const sku = label.slice(separator + 1).trim();
-    const unitsSold = numberValue(cellAt(row, quantityMerge.s.c));
-    if (!productName || !sku || unitsSold === null) continue;
-    const current = aggregated.get(sku);
-    aggregated.set(sku, {
-      sku,
-      productName: current?.productName || productName,
-      month,
-      unitsSold: (current?.unitsSold ?? 0) + unitsSold,
+    const separator = splitSkuFromLabel ? label.lastIndexOf(",") : -1;
+    const productName = (separator >= 0 ? label.slice(0, separator) : label).trim();
+    const sku = separator >= 0 ? label.slice(separator + 1).trim() || null : null;
+    const unitsSold = numberValue(cellAt(row, quantityHeader.s.c));
+    if (!productName || unitsSold === null) continue;
+    parsed.push({ sku, productName, month, unitsSold });
+  }
+  return parsed;
+}
+
+export function parseGroupedMonthlyReport(input: XlsxInput, sheetName?: string): MonthlySales[] {
+  const aggregated = new Map<string, MonthlySales>();
+  for (const row of parseGroupedMonthlyReportRows(input, sheetName)) {
+    if (!row.sku) continue;
+    const current = aggregated.get(row.sku);
+    aggregated.set(row.sku, {
+      sku: row.sku,
+      productName: current?.productName || row.productName,
+      month: row.month,
+      unitsSold: (current?.unitsSold ?? 0) + row.unitsSold,
     });
   }
   return [...aggregated.values()];

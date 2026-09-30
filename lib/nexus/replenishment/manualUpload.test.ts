@@ -32,6 +32,30 @@ function groupedMonthlyReportBytes(): Uint8Array {
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx", cellStyles: true });
 }
 
+function uncodedGroupedMonthlyReportBytes(productName: string, unitsSold: number): Uint8Array {
+  const rows: unknown[][] = [
+    ["Продажи"],
+    [],
+    ["Покупатель", null, null, "март 2026", null, null, "Итого"],
+    ["Номенклатура", null, null, "Выручка,", "Количество", "Себестоимость,", "Выручка,", "Количество", "Себестоимость,"],
+    ["Клиент Альфа", null, null, 1_000, unitsSold, 800, 1_000, unitsSold, 800],
+    [productName, null, null, 1_000, unitsSold, 800, 1_000, unitsSold, 800],
+  ];
+  const worksheet = XLSX.utils.aoa_to_sheet(rows);
+  worksheet["!rows"] = rows.map((_, index) => index === 5 ? { level: 1 } : {});
+  worksheet["!merges"] = [
+    { s: { r: 2, c: 0 }, e: { r: 2, c: 2 } },
+    { s: { r: 2, c: 3 }, e: { r: 2, c: 5 } },
+    { s: { r: 2, c: 6 }, e: { r: 2, c: 8 } },
+    { s: { r: 3, c: 0 }, e: { r: 3, c: 2 } },
+    { s: { r: 4, c: 0 }, e: { r: 4, c: 2 } },
+    { s: { r: 5, c: 0 }, e: { r: 5, c: 2 } },
+  ];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Отчёт");
+  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx", cellStyles: true });
+}
+
 test("manual supplier slug is derived from its name and remains unique", () => {
   assert.equal(supplierKeyFromName("Новый Поставщик", []), "novyy-postavschik");
   assert.equal(supplierKeyFromName("Новый Поставщик", ["novyy-postavschik"]), "novyy-postavschik-2");
@@ -156,4 +180,50 @@ test("duplicate SKU-month rows from separate sales and stock files are summed ex
   assert.deepEqual(parsed.openingStocks, [
     { sku: "SKU-1", productName: "Автомат", month: "2026-03", openingStock: 14 },
   ]);
+});
+
+test("exact normalized product name links an uncoded grouped row to a coded file of the same supplier", async () => {
+  const parsed = await buildSupplierParsedData({ key: "name-match", name: "Сопоставление" }, {
+    monthlySales: [
+      workbookBytes([
+        ["Номенклатура", "Артикул", "март 2026"],
+        [null, null, "Количество"],
+        ["Товар А", "SKU-1", 5],
+      ]),
+      uncodedGroupedMonthlyReportBytes("товар   а", 7),
+    ],
+    openingStocks: [workbookBytes([
+      ["Номенклатура", "Артикул", "март 2026"],
+      [null, null, "нач. остаток"],
+      ["Товар А", "SKU-1", 20],
+    ])],
+  });
+
+  assert.deepEqual(parsed.monthlySales, [
+    { sku: "SKU-1", productName: "Товар А", month: "2026-03", unitsSold: 12 },
+  ]);
+  assert.equal(parsed.unmatchedProductNames, undefined);
+});
+
+test("unknown no-SKU product is excluded from demand and disclosed explicitly", async () => {
+  const parsed = await buildSupplierParsedData({ key: "name-miss", name: "Без пары" }, {
+    monthlySales: [
+      workbookBytes([
+        ["Номенклатура", "Артикул", "март 2026"],
+        [null, null, "Количество"],
+        ["Товар А", "SKU-1", 5],
+      ]),
+      uncodedGroupedMonthlyReportBytes("Неизвестный товар", 9),
+    ],
+    openingStocks: [workbookBytes([
+      ["Номенклатура", "Артикул", "март 2026"],
+      [null, null, "нач. остаток"],
+      ["Товар А", "SKU-1", 20],
+    ])],
+  });
+
+  assert.deepEqual(parsed.monthlySales, [
+    { sku: "SKU-1", productName: "Товар А", month: "2026-03", unitsSold: 5 },
+  ]);
+  assert.deepEqual(parsed.unmatchedProductNames, ["Неизвестный товар"]);
 });

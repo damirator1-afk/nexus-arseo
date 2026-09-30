@@ -24,6 +24,8 @@ export function UploadGate(props: {
   setFiles: Dispatch<SetStateAction<FilesState>>;
   supplierErrors: Record<string, string>;
   setSupplierErrors: Dispatch<SetStateAction<Record<string, string>>>;
+  unmatchedProductNames: Record<string, string[]>;
+  setUnmatchedProductNames: Dispatch<SetStateAction<Record<string, string[]>>>;
   planning: PlanningControls;
   setPlanning: Dispatch<SetStateAction<PlanningControls>>;
   error: string;
@@ -35,10 +37,16 @@ export function UploadGate(props: {
 }) {
   const {
     mode, onModeChange, suppliers, setSuppliers, files, setFiles, supplierErrors, setSupplierErrors,
+    unmatchedProductNames, setUnmatchedProductNames,
     planning, setPlanning, error, running, progress, ready, selectedCount, onRun,
   } = props;
   const [newSupplierName, setNewSupplierName] = useState("");
   const normalizedNames = suppliers.map((supplier) => supplier.name.trim().toLocaleLowerCase("ru-RU"));
+
+  const clearSupplierDiagnostics = (supplier: SupplierKey) => {
+    setSupplierErrors((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== supplier)));
+    setUnmatchedProductNames((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== supplier)));
+  };
 
   const addFiles = (supplier: SupplierKey, kind: FileKind, selected: File[]) => {
     if (!selected.length) return;
@@ -48,7 +56,7 @@ export function UploadGate(props: {
       const additions = selected.filter((file) => !fingerprints.has(`${file.name}\u0000${file.size}\u0000${file.lastModified}`));
       return { ...current, [supplier]: { ...current[supplier], [kind]: [...existing, ...additions] } };
     });
-    setSupplierErrors((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== supplier)));
+    clearSupplierDiagnostics(supplier);
   };
 
   const removeFile = (supplier: SupplierKey, kind: FileKind, index: number) => {
@@ -59,7 +67,7 @@ export function UploadGate(props: {
         [kind]: (current[supplier]?.[kind] ?? []).filter((_, fileIndex) => fileIndex !== index),
       },
     }));
-    setSupplierErrors((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== supplier)));
+    clearSupplierDiagnostics(supplier);
   };
 
   const addSupplier = () => {
@@ -74,6 +82,8 @@ export function UploadGate(props: {
   const removeSupplier = (key: string) => {
     setSuppliers((current) => current.filter((supplier) => supplier.key !== key));
     setFiles((current) => Object.fromEntries(Object.entries(current).filter(([supplierKey]) => supplierKey !== key)));
+    setSupplierErrors((current) => Object.fromEntries(Object.entries(current).filter(([supplierKey]) => supplierKey !== key)));
+    setUnmatchedProductNames((current) => Object.fromEntries(Object.entries(current).filter(([supplierKey]) => supplierKey !== key)));
   };
 
   return <section className={styles.uploadArea} aria-label="Загрузка исходных данных">
@@ -117,6 +127,7 @@ export function UploadGate(props: {
         const supplierFiles = files[supplier.key] ?? {};
         const loadedFields = FILE_FIELDS.filter((field) => supplierFiles[field.kind]?.length);
         const missingTreatments = supplierMissingTreatments(supplierFiles);
+        const unmatchedNames = unmatchedProductNames[supplier.key] ?? [];
         const normalizedName = supplier.name.trim().toLocaleLowerCase("ru-RU");
         const nameError = !normalizedName
           ? "Укажите название поставщика."
@@ -168,6 +179,11 @@ export function UploadGate(props: {
               return `${field.label}${count > 1 ? ` (${count} файла)` : ""}`;
             }).join(", ") : "файлы пока не выбраны"}</p>
             {missingTreatments.map((treatment) => <p key={treatment}><span className={styles.sourceMissing}>Пробел:</span> {treatment}</p>)}
+            {unmatchedNames.length > 0 && <p>
+              <span className={styles.sourceMissing}>Не сопоставлено по названию:</span>{" "}
+              {unmatchedNames.length} позиций{unmatchedNames.length > 20 ? " (показаны первые 20)" : ""}: {unmatchedNames.slice(0, 20).join(", ")}
+              {unmatchedNames.length > 20 ? ` — и ещё ${unmatchedNames.length - 20}` : ""}.
+            </p>}
           </div>
 
           {(nameError || supplierErrors[supplier.key]) && <p className={styles.inlineWarning} role="alert">{nameError || supplierErrors[supplier.key]}</p>}

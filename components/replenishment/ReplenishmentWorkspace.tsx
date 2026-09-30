@@ -38,6 +38,7 @@ export function ReplenishmentWorkspace() {
   const [suppliers, setSuppliers] = useState<SupplierDefinition[]>(createInitialManualSuppliers);
   const [files, setFiles] = useState<FilesState>(() => Object.fromEntries(createInitialManualSuppliers().map((supplier) => [supplier.key, {}])));
   const [supplierErrors, setSupplierErrors] = useState<Record<string, string>>({});
+  const [unmatchedProductNames, setUnmatchedProductNames] = useState<Record<string, string[]>>({});
   const [mode, setMode] = useState<Mode>("demo");
   const [plan, setPlan] = useState<ReplenishmentPlan>();
   const [dataSource, setDataSource] = useState<DataSource>();
@@ -123,6 +124,7 @@ export function ReplenishmentWorkspace() {
       setPlan(calculateReplenishment(assembled));
       setAssemblyMetadata({ missingSources: assembled.missingSources, asOfMonthSource: assembled.asOfMonthSource });
       setCostPrices(new Map(results.flatMap((result) => result.prices.map((price) => [supplierSkuKey(result.parsedData.supplier, price.sku), price.costPrice] as const))));
+      setUnmatchedProductNames({});
       setDataSource("demo"); setDecisions({}); setExceptionView("all"); setActiveTab("today");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Не удалось загрузить демо-данные на реальных файлах партнёра.");
@@ -131,22 +133,27 @@ export function ReplenishmentWorkspace() {
   };
 
   const runManual = async () => {
-    setRunning(true); setError(""); setSupplierErrors({}); setProgress("Читаем выбранные файлы…");
+    setRunning(true); setError(""); setSupplierErrors({}); setUnmatchedProductNames({}); setProgress("Читаем выбранные файлы…");
     try {
       const names = suppliers.map((supplier) => supplier.name.trim());
       if (names.some((name) => !name)) throw new Error("Укажите название каждого поставщика.");
       if (new Set(names.map((name) => name.toLocaleLowerCase("ru-RU"))).size !== names.length) throw new Error("Названия поставщиков должны быть уникальными.");
 
       const settled = await Promise.allSettled(suppliers.map(async (supplier) => ({
+        supplierKey: supplier.key,
         parsedData: await parseSupplierFromFiles(supplier, files[supplier.key] ?? {}, setProgress, planning.assumedYearForBareMonths),
         prices: await parseSupplierCostPrices(files[supplier.key] ?? {}),
       })));
       const stockErrors: Record<string, string> = {};
+      const unmatchedBySupplier: Record<string, string[]> = {};
       const parsed: Awaited<ReturnType<typeof parseSupplierFromFiles>>[] = [];
       const prices: Array<{ supplier: string; sku: string; costPrice: number }> = [];
       settled.forEach((result) => {
         if (result.status === "fulfilled") {
           parsed.push(result.value.parsedData);
+          if (result.value.parsedData.unmatchedProductNames?.length) {
+            unmatchedBySupplier[result.value.supplierKey] = result.value.parsedData.unmatchedProductNames;
+          }
           prices.push(...result.value.prices.map((price) => ({ ...price, supplier: result.value.parsedData.supplier })));
         } else if (result.reason instanceof MissingStockSourceError) {
           stockErrors[result.reason.supplierKey] = result.reason.message;
@@ -154,6 +161,7 @@ export function ReplenishmentWorkspace() {
           throw result.reason;
         }
       });
+      setUnmatchedProductNames(unmatchedBySupplier);
       if (Object.keys(stockErrors).length) {
         setSupplierErrors(stockErrors);
         setError("Проверьте источники остатка у отмеченных поставщиков.");
@@ -230,6 +238,8 @@ export function ReplenishmentWorkspace() {
       setFiles={setFiles}
       supplierErrors={supplierErrors}
       setSupplierErrors={setSupplierErrors}
+      unmatchedProductNames={unmatchedProductNames}
+      setUnmatchedProductNames={setUnmatchedProductNames}
       planning={planning}
       setPlanning={setPlanning}
       error={error}
@@ -244,6 +254,14 @@ export function ReplenishmentWorkspace() {
       <nav className={styles.tabs} role="tablist" aria-label="Разделы">
         {TABS.map((tab) => <button key={tab.key} className={`${styles.tab} ${activeTab === tab.key ? styles.tabActive : ""}`} onClick={() => setActiveTab(tab.key)}>{tab.label}</button>)}
       </nav>
+
+      {Object.keys(unmatchedProductNames).length > 0 && <div className={`${styles.inlineWarning} ${styles.resultWarning}`} role="status">
+        {Object.entries(unmatchedProductNames).map(([supplierKey, names]) => <p key={supplierKey}>
+          <b>{suppliers.find((supplier) => supplier.key === supplierKey)?.name ?? supplierKey}:</b>{" "}
+          не сопоставлено по точному названию {names.length} позиций{names.length > 20 ? " (показаны первые 20)" : ""}: {names.slice(0, 20).join(", ")}
+          {names.length > 20 ? ` — и ещё ${names.length - 20}` : ""}. Эти строки не включены в расчёт.
+        </p>)}
+      </div>}
 
       {activeTab === "today" && <TodayTab plan={plan} summary={summary} dataSource={dataSource ?? "own"} costPrices={costPrices} onOpenSku={onOpenSku} onNewCalculation={onNewCalculation} />}
       {activeTab === "orders" && <OrdersTab

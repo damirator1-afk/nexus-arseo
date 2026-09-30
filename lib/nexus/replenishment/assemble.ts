@@ -15,6 +15,8 @@ export interface SupplierParsedData {
   currentStocks?: SkuCurrentStock[];
   /** Batch-level stock (warehouse + shelf life), when the supplier provides it — see aggregateStockBatches. */
   stockBatches?: SkuStockBatch[];
+  /** Exact product names from no-SKU sales rows that could not be reconciled within this supplier. */
+  unmatchedProductNames?: string[];
   /** File kinds not supplied by this supplier; retained for transparent UI disclosure. */
   missingSources?: ReplenishmentSourceKind[];
 }

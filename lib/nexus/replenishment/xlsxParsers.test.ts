@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import {
   isMissingColumnError,
   parseGroupedMonthlyReport,
+  parseGroupedMonthlyReportRows,
   parseInboundShipments,
   parseMonth,
   parseMonthlyOpeningStock,
@@ -43,6 +44,30 @@ function groupedReportBytes(period = "Период: 01.09.2026 - 30.09.2026"): U
   ));
   worksheet["!merges"] = [
     { s: { r: 2, c: 12 }, e: { r: 5, c: 13 } },
+  ];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Отчёт");
+  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx", cellStyles: true });
+}
+
+function uncodedGroupedReportBytes(): Uint8Array {
+  const rows: unknown[][] = [
+    ["Продажи"],
+    [],
+    ["Покупатель", null, null, "март 2026", null, null, "Итого"],
+    ["Номенклатура", null, null, "Выручка,", "Количество", "Себестоимость,", "Выручка,", "Количество", "Себестоимость,"],
+    ["Клиент Альфа", null, null, 1_000, 4, 800, 1_000, 4, 800],
+    ["Товар А, 150 г", null, null, 1_000, 4, 800, 1_000, 4, 800],
+  ];
+  const worksheet = XLSX.utils.aoa_to_sheet(rows);
+  worksheet["!rows"] = rows.map((_, index) => index === 5 ? { level: 1 } : {});
+  worksheet["!merges"] = [
+    { s: { r: 2, c: 0 }, e: { r: 2, c: 2 } },
+    { s: { r: 2, c: 3 }, e: { r: 2, c: 5 } },
+    { s: { r: 2, c: 6 }, e: { r: 2, c: 8 } },
+    { s: { r: 3, c: 0 }, e: { r: 3, c: 2 } },
+    { s: { r: 4, c: 0 }, e: { r: 4, c: 2 } },
+    { s: { r: 5, c: 0 }, e: { r: 5, c: 2 } },
   ];
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Отчёт");
@@ -102,6 +127,15 @@ test("grouped 1C report rejects a period spanning more than one calendar month",
     () => parseGroupedMonthlyReport(groupedReportBytes("Период: 25.09.2026 - 02.10.2026")),
     /отчёт охватывает больше одного месяца/iu,
   );
+});
+
+test("grouped no-SKU report reads 'month year' header and keeps the full product name as an unmatched row", () => {
+  const bytes = uncodedGroupedReportBytes();
+  assert.deepEqual(parseGroupedMonthlyReportRows(bytes), [
+    { sku: null, productName: "Товар А, 150 г", month: "2026-03", unitsSold: 4 },
+  ]);
+  // Backwards-compatible wrapper cannot safely invent an SKU and therefore still emits no row.
+  assert.deepEqual(parseGroupedMonthlyReport(bytes), []);
 });
 
 test("grouped 1C report finds the real header even when a second 'Количество' block sits lower in the sheet and earlier in !merges", () => {

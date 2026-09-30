@@ -8,8 +8,9 @@ import type { ReplenishmentRecommendation } from "../../lib/nexus/replenishment/
 import type { ReplenishmentNarrationInput } from "../../lib/nexus/replenishment/narration.ts";
 import {
   isMissingColumnError, parseInboundShipments, parseMinimumOrderQuantities, parseMonthlyOpeningStock,
-  parseGroupedMonthlyReport, parseMonthlySales, parseSalesTransactions, parseSkuCategories, parseSkuCostPrices,
+  parseGroupedMonthlyReportRows, parseMonthlySales, parseSalesTransactions, parseSkuCategories, parseSkuCostPrices,
   parseSkuCurrentStocks, parseSkuReservations, parseSkuStockBatches,
+  type GroupedMonthlyRow,
 } from "../../lib/nexus/replenishment/xlsxParsers.ts";
 import type { MonthlyOpeningStock, MonthlySales, SkuCostPrice, XlsxInput } from "../../lib/nexus/replenishment/types.ts";
 
@@ -149,6 +150,49 @@ function aggregateMonthlyRows<T extends { sku: string; month: string }>(
   return [...aggregated.values()];
 }
 
+function normalizedProductName(value: string): string {
+  return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("ru-RU");
+}
+
+function reconcileMonthlySalesRows(rows: GroupedMonthlyRow[]): {
+  monthlySales: MonthlySales[];
+  unmatchedProductNames: string[];
+} {
+  // A name is authoritative only when every coded occurrence within this supplier points to the
+  // same SKU. Conflicting exact names remain unmatched: silently selecting either code would be
+  // worse than excluding that demand and disclosing it to the user.
+  const skuByProductName = new Map<string, string | null>();
+  for (const row of rows) {
+    if (!row.sku) continue;
+    const normalizedName = normalizedProductName(row.productName);
+    if (!normalizedName) continue;
+    const existing = skuByProductName.get(normalizedName);
+    if (!skuByProductName.has(normalizedName)) skuByProductName.set(normalizedName, row.sku);
+    else if (existing !== row.sku) skuByProductName.set(normalizedName, null);
+  }
+
+  const matched: MonthlySales[] = [];
+  const unmatched = new Map<string, string>();
+  for (const row of rows) {
+    if (row.sku) {
+      matched.push({ ...row, sku: row.sku });
+      continue;
+    }
+    const normalizedName = normalizedProductName(row.productName);
+    const matchedSku = skuByProductName.get(normalizedName);
+    if (matchedSku) {
+      matched.push({ ...row, sku: matchedSku });
+    } else if (normalizedName && !unmatched.has(normalizedName)) {
+      unmatched.set(normalizedName, row.productName.trim().replace(/\s+/gu, " "));
+    }
+  }
+
+  return {
+    monthlySales: aggregateMonthlyRows(matched, (row) => row.unitsSold, (row, unitsSold) => ({ ...row, unitsSold })),
+    unmatchedProductNames: [...unmatched.values()],
+  };
+}
+
 export class MissingStockSourceError extends Error {
   readonly supplierKey: string;
 
@@ -193,13 +237,13 @@ export async function buildSupplierParsedData(
   };
 
   const salesTransactions = await parseProvided("transactions", "динамика продаж", parseSalesTransactions);
-  const monthlySalesRows = await parseProvided<MonthlySales>("monthlySales", "продажи по месяцам", (input) => {
+  const monthlySalesRows = await parseProvided<GroupedMonthlyRow>("monthlySales", "продажи по месяцам", (input) => {
     try {
       return parseMonthlySales(input, undefined, assumedYearForBareMonths);
     } catch (ordinaryError) {
       if (!isMissingColumnError(ordinaryError)) throw ordinaryError;
       try {
-        return parseGroupedMonthlyReport(input);
+        return parseGroupedMonthlyReportRows(input);
       } catch (groupedError) {
         const ordinaryReason = ordinaryError instanceof Error ? ordinaryError.message : "неизвестная ошибка";
         const groupedReason = groupedError instanceof Error ? groupedError.message : "неизвестная ошибка";
@@ -207,7 +251,7 @@ export async function buildSupplierParsedData(
       }
     }
   });
-  const monthlySales = aggregateMonthlyRows(monthlySalesRows, (row) => row.unitsSold, (row, unitsSold) => ({ ...row, unitsSold }));
+  const { monthlySales, unmatchedProductNames } = reconcileMonthlySalesRows(monthlySalesRows);
   const openingStockRows = await parseProvided<MonthlyOpeningStock>("openingStocks", "остатки по месяцам", (input) => (
     parseMonthlyOpeningStock(input, undefined, assumedYearForBareMonths)
   ));
@@ -240,6 +284,7 @@ export async function buildSupplierParsedData(
     reservations,
     currentStocks,
     stockBatches,
+    ...(unmatchedProductNames.length ? { unmatchedProductNames } : {}),
     missingSources: FILE_FIELDS.filter((field) => !buffers[field.kind]?.length).map((field) => field.kind),
   };
 }

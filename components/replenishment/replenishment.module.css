@@ -120,6 +120,8 @@
 .sourcePresent { color: var(--good); font-weight: 700; }
 .sourceMissing { color: var(--warn); font-weight: 700; }
 .inlineWarning { margin: 0 10px 12px; padding: 10px 12px; border: 1px solid var(--crit); border-radius: 9px; background: var(--crit-soft); color: var(--crit); font-size: 12px; line-height: 1.45; }
+.resultWarning { margin: 14px 0 18px; }
+.resultWarning p { margin: 4px 0; }
 .sourceDisclosure { padding: 11px 0; border-top: 1px solid var(--line); }
 .sourceDisclosure:first-of-type { padding-top: 0; border-top: 0; }
 .sourceDisclosure > b { display: block; margin-bottom: 5px; font-size: 13px; }
