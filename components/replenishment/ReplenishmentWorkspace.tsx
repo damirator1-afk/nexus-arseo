@@ -204,8 +204,9 @@ export function ReplenishmentWorkspace() {
   return <main className={styles.shell} ref={shellRef}>
     <header className={styles.topbar}>
       <a href="/" className={styles.brand}>
-        <span>N</span>
-        <div><b>Nexus</b><small>Автозаказ поставщикам</small></div>
+        {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset, no next/image usage elsewhere in this app */}
+        <img src="/brand/nexus-logo.png" alt="Nexus" className={styles.brandLogo} width={1481} height={411} />
+        <small className={styles.brandTagline}>Автозаказ</small>
       </a>
       <div style={{ marginLeft: "auto" }}><ThemeToggle shellRef={shellRef} /></div>
     </header>
