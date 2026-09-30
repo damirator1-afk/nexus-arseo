@@ -550,8 +550,27 @@ export function parseSkuCostPrices(input: XlsxInput, sheetName?: string): SkuCos
  * uses) marks the batch unusable outright; otherwise a present shelf-life percentage below the caller's
  * threshold (applied later, in assemble.ts) excludes it; a batch with no shelf-life data at all is valid.
  */
-export function parseSkuStockBatches(input: XlsxInput, sheetName?: string): SkuStockBatch[] {
-  const rows = rowsFromWorkbook(input, sheetName);
+function shelfLifePercentage(value: Cell): number | null {
+  const parsed = numberValue(value);
+  if (parsed === null) return null;
+  // Excel stores a displayed 35% as 0.35. Some exports instead store the already-scaled 35, so
+  // accept both representations and normalize them to the percentage-point contract used later.
+  return parsed >= 0 && parsed <= 1 ? parsed * 100 : parsed;
+}
+
+function expiryTimestamp(value: Cell): number | null {
+  if (value instanceof Date && Number.isFinite(value.getTime())) return value.getTime();
+  if (typeof value === "number") {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    return parsed ? Date.UTC(parsed.y, parsed.m - 1, parsed.d) : null;
+  }
+  const match = text(value).match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2}|\d{4})$/u);
+  if (!match) return null;
+  const year = Number(match[3].length === 2 ? `20${match[3]}` : match[3]);
+  return Date.UTC(year, Number(match[2]) - 1, Number(match[1]));
+}
+
+function parseFlatStockBatches(rows: Rows): SkuStockBatch[] {
   const headerIndex = findHeaderRow(rows, [combine(SKU_PATTERNS), combine(QUANTITY_PATTERNS)]);
   const header = rows[headerIndex];
   const sku = requireColumn(header, SKU_PATTERNS, "SKU code");
@@ -565,7 +584,7 @@ export function parseSkuStockBatches(input: XlsxInput, sheetName?: string): SkuS
     const quantityValue = numberValue(row[quantity]);
     if (!skuValue || quantityValue === null || quantityValue <= 0) return [];
     const expired = expiryStatus >= 0 && numberValue(row[expiryStatus]) === null && text(row[expiryStatus]) !== "";
-    const percentValue = shelfLifePercent >= 0 ? numberValue(row[shelfLifePercent]) : null;
+    const percentValue = shelfLifePercent >= 0 ? shelfLifePercentage(row[shelfLifePercent]) : null;
     return [{
       sku: skuValue,
       ...(warehouse >= 0 && text(row[warehouse]) ? { warehouse: text(row[warehouse]) } : {}),
@@ -574,4 +593,62 @@ export function parseSkuStockBatches(input: XlsxInput, sheetName?: string): SkuS
       ...(expired ? { expired: true } : {}),
     }];
   });
+}
+
+function parseWarehouseMatrixStockBatches(rows: Rows): SkuStockBatch[] {
+  const headerIndex = findHeaderRow(rows, [combine(SKU_PATTERNS), /склад/iu]);
+  const header = rows[headerIndex];
+  const sku = requireColumn(header, SKU_PATTERNS, "SKU code");
+  const shelfLifePercent = findColumn(header, SHELF_LIFE_REMAINING_PATTERNS);
+  const expiryDate = findColumn(header, [/^срок годности$/, /^годен до$/, /^expiry date$/]);
+  const warehouseColumns = header.flatMap((cell, index) => {
+    const normalized = key(cell);
+    return /(?:^| )склад(?: |$)/u.test(normalized) ? [{ index, warehouse: text(cell) }] : [];
+  });
+  if (!warehouseColumns.length) throw new Error("Required column was not found: warehouse stock columns");
+
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  return rows.slice(headerIndex + 1).flatMap((row) => {
+    const skuValue = text(row[sku]);
+    if (!skuValue) return [];
+    const percentValue = shelfLifePercent >= 0 ? shelfLifePercentage(row[shelfLifePercent]) : null;
+    const expiresAt = expiryDate >= 0 ? expiryTimestamp(row[expiryDate]) : null;
+    const expired = expiresAt !== null && expiresAt < todayUtc;
+    return warehouseColumns.flatMap(({ index, warehouse }) => {
+      const quantityValue = numberValue(row[index]);
+      if (quantityValue === null || quantityValue <= 0) return [];
+      return [{
+        sku: skuValue,
+        warehouse,
+        quantity: quantityValue,
+        ...(percentValue !== null ? { shelfLifeRemainingPercent: percentValue } : {}),
+        ...(expired ? { expired: true } : {}),
+      }];
+    });
+  });
+}
+
+export function parseSkuStockBatches(input: XlsxInput, sheetName?: string): SkuStockBatch[] {
+  const workbook = XLSX.read(input, { type: "array", cellDates: true });
+  const candidates = sheetName ? [sheetName] : workbook.SheetNames;
+  let candidateError: unknown;
+  for (const candidate of candidates) {
+    const worksheet = workbook.Sheets[candidate];
+    if (!worksheet) {
+      if (sheetName) throw new Error(`Worksheet not found: ${sheetName}`);
+      continue;
+    }
+    const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: true, defval: null }) as Rows;
+    for (const parser of [parseFlatStockBatches, parseWarehouseMatrixStockBatches]) {
+      try {
+        return parser(rows);
+      } catch (error) {
+        if (!isMissingColumnError(error)) throw error;
+        candidateError = error;
+      }
+    }
+  }
+  if (candidateError instanceof Error) throw candidateError;
+  throw new Error("Required XLSX headers were not found.");
 }

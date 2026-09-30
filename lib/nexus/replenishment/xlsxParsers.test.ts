@@ -334,3 +334,17 @@ test("stock-batch parser treats a batch with no shelf-life columns at all as val
   ]);
   assert.deepEqual(parseSkuStockBatches(bytes), [{ sku: "SKU-1", quantity: 40 }]);
 });
+
+test("stock-batch parser expands a real-style warehouse matrix and normalizes Excel percentages", () => {
+  const bytes = workbookBytes([
+    ["Артикул", "Номенклатура", "Срок годности", "Остаток срока годности, %", "Основной склад", "Склад Алматы", "Склад Астана"],
+    ["SKU-1", "Товар один", "31.12.2099", 0.51, 5, 7, null],
+    ["SKU-2", "Товар два", "01.01.2000", null, null, null, 3],
+  ]);
+
+  assert.deepEqual(parseSkuStockBatches(bytes), [
+    { sku: "SKU-1", warehouse: "Основной склад", quantity: 5, shelfLifeRemainingPercent: 51 },
+    { sku: "SKU-1", warehouse: "Склад Алматы", quantity: 7, shelfLifeRemainingPercent: 51 },
+    { sku: "SKU-2", warehouse: "Склад Астана", quantity: 3, expired: true },
+  ]);
+});

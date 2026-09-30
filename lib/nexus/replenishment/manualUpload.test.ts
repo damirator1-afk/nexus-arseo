@@ -227,3 +227,23 @@ test("unknown no-SKU product is excluded from demand and disclosed explicitly", 
   ]);
   assert.deepEqual(parsed.unmatchedProductNames, ["Неизвестный товар"]);
 });
+
+test("warehouse-matrix stock uploaded in the monthly-stock field is recognized as batch stock", async () => {
+  const parsed = await buildSupplierParsedData({ key: "matrix-stock", name: "Матрица складов" }, {
+    monthlySales: [workbookBytes([
+      ["Номенклатура", "Артикул", "сент. 2026"],
+      [null, null, "Количество"],
+      ["Товар один", "SKU-1", 5],
+    ])],
+    openingStocks: [workbookBytes([
+      ["Артикул", "Номенклатура", "Срок годности", "Остаток срока годности, %", "Основной склад", "Склад Алматы", "Склад Астана"],
+      ["SKU-1", "Товар один", "31.12.2099", 0.45, null, 10, 4],
+    ])],
+  });
+
+  assert.deepEqual(parsed.openingStocks, []);
+  assert.deepEqual(parsed.stockBatches, [
+    { sku: "SKU-1", warehouse: "Склад Алматы", quantity: 10, shelfLifeRemainingPercent: 45 },
+    { sku: "SKU-1", warehouse: "Склад Астана", quantity: 4, shelfLifeRemainingPercent: 45 },
+  ]);
+});

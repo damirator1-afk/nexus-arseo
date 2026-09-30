@@ -12,7 +12,7 @@ import {
   parseSkuCurrentStocks, parseSkuReservations, parseSkuStockBatches,
   type GroupedMonthlyRow,
 } from "../../lib/nexus/replenishment/xlsxParsers.ts";
-import type { MonthlyOpeningStock, MonthlySales, SkuCostPrice, XlsxInput } from "../../lib/nexus/replenishment/types.ts";
+import type { MonthlyOpeningStock, MonthlySales, SkuCostPrice, SkuStockBatch, XlsxInput } from "../../lib/nexus/replenishment/types.ts";
 
 export type FileKind = ReplenishmentSourceKind;
 export type SupplierKey = string;
@@ -252,13 +252,31 @@ export async function buildSupplierParsedData(
     }
   });
   const { monthlySales, unmatchedProductNames } = reconcileMonthlySalesRows(monthlySalesRows);
-  const openingStockRows = await parseProvided<MonthlyOpeningStock>("openingStocks", "остатки по месяцам", (input) => (
-    parseMonthlyOpeningStock(input, undefined, assumedYearForBareMonths)
-  ));
+  const stockBatchesFromOpeningStocks: SkuStockBatch[] = [];
+  const openingStockRows = await parseProvided<MonthlyOpeningStock>("openingStocks", "остатки по месяцам", (input) => {
+    try {
+      return parseMonthlyOpeningStock(input, undefined, assumedYearForBareMonths);
+    } catch (monthlyError) {
+      const isStructuralMismatch = isMissingColumnError(monthlyError)
+        || (monthlyError instanceof Error && monthlyError.message === "No monthly columns were found.");
+      if (!isStructuralMismatch) throw monthlyError;
+      try {
+        stockBatchesFromOpeningStocks.push(...parseSkuStockBatches(input));
+        return [];
+      } catch (batchError) {
+        const monthlyReason = monthlyError instanceof Error ? monthlyError.message : "неизвестная ошибка";
+        const batchReason = batchError instanceof Error ? batchError.message : "неизвестная ошибка";
+        throw new Error(`Не подошёл ни помесячный формат (${monthlyReason}), ни формат остатков по партиям/складам (${batchReason})`);
+      }
+    }
+  });
   const openingStocks = aggregateMonthlyRows(openingStockRows, (row) => row.openingStock, (row, openingStock) => ({ ...row, openingStock }));
   const inboundShipments = await parseProvided("inbound", "товар в пути", parseInboundShipments);
   const minimumOrderQuantities = await parseProvided("moq", "MOQ и кратность", parseMinimumOrderQuantities);
-  const stockBatches = await parseProvided("stockBatches", "остатки по партиям", parseSkuStockBatches);
+  const stockBatches = [
+    ...stockBatchesFromOpeningStocks,
+    ...await parseProvided("stockBatches", "остатки по партиям", parseSkuStockBatches),
+  ];
 
   onProgress?.(`${supplier.name}: дополнительные поля…`);
   const optionalBuffers = optionalSourceKinds
