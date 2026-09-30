@@ -230,11 +230,14 @@ test("unknown no-SKU product is excluded from demand and disclosed explicitly", 
 
 test("warehouse-matrix stock uploaded in the monthly-stock field is recognized as batch stock", async () => {
   const parsed = await buildSupplierParsedData({ key: "matrix-stock", name: "Матрица складов" }, {
-    monthlySales: [workbookBytes([
-      ["Номенклатура", "Артикул", "сент. 2026"],
-      [null, null, "Количество"],
-      ["Товар один", "SKU-1", 5],
-    ])],
+    monthlySales: [
+      uncodedGroupedMonthlyReportBytes("товар   один", 5),
+      workbookBytes([
+        ["Номенклатура", "Артикул", "март 2026"],
+        [null, null, "Количество"],
+        ["ТОВАР ОДИН", "EAN-0001", 3],
+      ]),
+    ],
     openingStocks: [workbookBytes([
       ["Артикул", "Номенклатура", "Срок годности", "Остаток срока годности, %", "Основной склад", "Склад Алматы", "Склад Астана"],
       ["SKU-1", "Товар один", "31.12.2099", 0.45, null, 10, 4],
@@ -242,8 +245,12 @@ test("warehouse-matrix stock uploaded in the monthly-stock field is recognized a
   });
 
   assert.deepEqual(parsed.openingStocks, []);
+  assert.deepEqual(parsed.monthlySales, [
+    { sku: "SKU-1", productName: "товар   один", month: "2026-03", unitsSold: 8 },
+  ]);
+  assert.equal(parsed.unmatchedProductNames, undefined);
   assert.deepEqual(parsed.stockBatches, [
-    { sku: "SKU-1", warehouse: "Склад Алматы", quantity: 10, shelfLifeRemainingPercent: 45 },
-    { sku: "SKU-1", warehouse: "Склад Астана", quantity: 4, shelfLifeRemainingPercent: 45 },
+    { sku: "SKU-1", productName: "Товар один", warehouse: "Склад Алматы", quantity: 10, shelfLifeRemainingPercent: 45 },
+    { sku: "SKU-1", productName: "Товар один", warehouse: "Склад Астана", quantity: 4, shelfLifeRemainingPercent: 45 },
   ]);
 });

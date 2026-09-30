@@ -81,6 +81,8 @@ export interface SkuCurrentStock {
 export interface SkuStockBatch {
   supplier?: string;
   sku: string;
+  /** Optional source name, retained so no-SKU sales rows can be matched exactly within a supplier. */
+  productName?: string;
   /** Present only when the source distinguishes physical locations. */
   warehouse?: string;
   quantity: number;

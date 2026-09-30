@@ -321,9 +321,9 @@ test("stock-batch parser reads warehouse and shelf-life columns, both optional",
     ["Астана", "SKU-1", "Батончик", "05.07.26", 18, 98, 12],
   ]);
   assert.deepEqual(parseSkuStockBatches(bytes), [
-    { sku: "SKU-1", warehouse: "Алматы", quantity: 56, shelfLifeRemainingPercent: 51 },
-    { sku: "SKU-2", warehouse: "Алматы", quantity: 2, expired: true },
-    { sku: "SKU-1", warehouse: "Астана", quantity: 18, shelfLifeRemainingPercent: 12 },
+    { sku: "SKU-1", productName: "Батончик", warehouse: "Алматы", quantity: 56, shelfLifeRemainingPercent: 51 },
+    { sku: "SKU-2", productName: "Вафли", warehouse: "Алматы", quantity: 2, expired: true },
+    { sku: "SKU-1", productName: "Батончик", warehouse: "Астана", quantity: 18, shelfLifeRemainingPercent: 12 },
   ]);
 });
 
@@ -343,8 +343,8 @@ test("stock-batch parser expands a real-style warehouse matrix and normalizes Ex
   ]);
 
   assert.deepEqual(parseSkuStockBatches(bytes), [
-    { sku: "SKU-1", warehouse: "Основной склад", quantity: 5, shelfLifeRemainingPercent: 51 },
-    { sku: "SKU-1", warehouse: "Склад Алматы", quantity: 7, shelfLifeRemainingPercent: 51 },
-    { sku: "SKU-2", warehouse: "Склад Астана", quantity: 3, expired: true },
+    { sku: "SKU-1", productName: "Товар один", warehouse: "Основной склад", quantity: 5, shelfLifeRemainingPercent: 51 },
+    { sku: "SKU-1", productName: "Товар один", warehouse: "Склад Алматы", quantity: 7, shelfLifeRemainingPercent: 51 },
+    { sku: "SKU-2", productName: "Товар два", warehouse: "Склад Астана", quantity: 3, expired: true },
   ]);
 });

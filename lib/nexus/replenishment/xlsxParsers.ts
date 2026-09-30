@@ -574,6 +574,7 @@ function parseFlatStockBatches(rows: Rows): SkuStockBatch[] {
   const headerIndex = findHeaderRow(rows, [combine(SKU_PATTERNS), combine(QUANTITY_PATTERNS)]);
   const header = rows[headerIndex];
   const sku = requireColumn(header, SKU_PATTERNS, "SKU code");
+  const product = findColumn(header, PRODUCT_NAME_PATTERNS);
   const quantity = requireColumn(header, QUANTITY_PATTERNS, "Количество");
   const warehouse = findColumn(header, WAREHOUSE_PATTERNS);
   const shelfLifePercent = findColumn(header, SHELF_LIFE_REMAINING_PATTERNS);
@@ -587,6 +588,7 @@ function parseFlatStockBatches(rows: Rows): SkuStockBatch[] {
     const percentValue = shelfLifePercent >= 0 ? shelfLifePercentage(row[shelfLifePercent]) : null;
     return [{
       sku: skuValue,
+      ...(product >= 0 && text(row[product]) ? { productName: text(row[product]) } : {}),
       ...(warehouse >= 0 && text(row[warehouse]) ? { warehouse: text(row[warehouse]) } : {}),
       quantity: quantityValue,
       ...(percentValue !== null ? { shelfLifeRemainingPercent: percentValue } : {}),
@@ -599,6 +601,7 @@ function parseWarehouseMatrixStockBatches(rows: Rows): SkuStockBatch[] {
   const headerIndex = findHeaderRow(rows, [combine(SKU_PATTERNS), /склад/iu]);
   const header = rows[headerIndex];
   const sku = requireColumn(header, SKU_PATTERNS, "SKU code");
+  const product = findColumn(header, PRODUCT_NAME_PATTERNS);
   const shelfLifePercent = findColumn(header, SHELF_LIFE_REMAINING_PATTERNS);
   const expiryDate = findColumn(header, [/^срок годности$/, /^годен до$/, /^expiry date$/]);
   const warehouseColumns = header.flatMap((cell, index) => {
@@ -620,6 +623,7 @@ function parseWarehouseMatrixStockBatches(rows: Rows): SkuStockBatch[] {
       if (quantityValue === null || quantityValue <= 0) return [];
       return [{
         sku: skuValue,
+        ...(product >= 0 && text(row[product]) ? { productName: text(row[product]) } : {}),
         warehouse,
         quantity: quantityValue,
         ...(percentValue !== null ? { shelfLifeRemainingPercent: percentValue } : {}),

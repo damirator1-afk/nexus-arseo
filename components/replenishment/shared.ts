@@ -154,32 +154,52 @@ function normalizedProductName(value: string): string {
   return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("ru-RU");
 }
 
-function reconcileMonthlySalesRows(rows: GroupedMonthlyRow[]): {
+function reconcileMonthlySalesRows(
+  rows: GroupedMonthlyRow[],
+  authoritativeIdentities: Array<{ sku: string; productName: string }> = [],
+): {
   monthlySales: MonthlySales[];
   unmatchedProductNames: string[];
 } {
-  // A name is authoritative only when every coded occurrence within this supplier points to the
-  // same SKU. Conflicting exact names remain unmatched: silently selecting either code would be
-  // worse than excluding that demand and disclosing it to the user.
-  const skuByProductName = new Map<string, string | null>();
-  for (const row of rows) {
-    if (!row.sku) continue;
-    const normalizedName = normalizedProductName(row.productName);
-    if (!normalizedName) continue;
-    const existing = skuByProductName.get(normalizedName);
-    if (!skuByProductName.has(normalizedName)) skuByProductName.set(normalizedName, row.sku);
-    else if (existing !== row.sku) skuByProductName.set(normalizedName, null);
-  }
+  const buildIdentityMap = (identities: Array<{ sku: string; productName: string }>): Map<string, string | null> => {
+    const result = new Map<string, string | null>();
+    for (const identity of identities) {
+      const normalizedName = normalizedProductName(identity.productName);
+      if (!normalizedName) continue;
+      const existing = result.get(normalizedName);
+      if (!result.has(normalizedName)) result.set(normalizedName, identity.sku);
+      else if (existing !== identity.sku) result.set(normalizedName, null);
+    }
+    return result;
+  };
+
+  // Stock, transaction, inbound and MOQ files carry the supplier's operational SKU identity. Some
+  // sales exports put an EAN barcode in their "Артикул" column instead. An exact-name authoritative
+  // match therefore canonicalizes both coded and uncoded sales rows to the operational SKU; conflicts
+  // inside the authoritative sources remain blocked rather than guessed.
+  const authoritativeSkuByName = buildIdentityMap(authoritativeIdentities);
+  const monthlySkuByName = buildIdentityMap(rows.flatMap((row) => (
+    row.sku ? [{ sku: row.sku, productName: row.productName }] : []
+  )));
+
+  const resolvedSku = (productName: string): string | null => {
+    const normalizedName = normalizedProductName(productName);
+    return authoritativeSkuByName.has(normalizedName)
+      ? authoritativeSkuByName.get(normalizedName) ?? null
+      : monthlySkuByName.get(normalizedName) ?? null;
+  };
 
   const matched: MonthlySales[] = [];
   const unmatched = new Map<string, string>();
   for (const row of rows) {
     if (row.sku) {
-      matched.push({ ...row, sku: row.sku });
+      const normalizedName = normalizedProductName(row.productName);
+      const authoritativeSku = authoritativeSkuByName.get(normalizedName);
+      matched.push({ ...row, sku: authoritativeSku || row.sku });
       continue;
     }
     const normalizedName = normalizedProductName(row.productName);
-    const matchedSku = skuByProductName.get(normalizedName);
+    const matchedSku = resolvedSku(row.productName);
     if (matchedSku) {
       matched.push({ ...row, sku: matchedSku });
     } else if (normalizedName && !unmatched.has(normalizedName)) {
@@ -251,7 +271,6 @@ export async function buildSupplierParsedData(
       }
     }
   });
-  const { monthlySales, unmatchedProductNames } = reconcileMonthlySalesRows(monthlySalesRows);
   const stockBatchesFromOpeningStocks: SkuStockBatch[] = [];
   const openingStockRows = await parseProvided<MonthlyOpeningStock>("openingStocks", "остатки по месяцам", (input) => {
     try {
@@ -277,6 +296,13 @@ export async function buildSupplierParsedData(
     ...stockBatchesFromOpeningStocks,
     ...await parseProvided("stockBatches", "остатки по партиям", parseSkuStockBatches),
   ];
+  const { monthlySales, unmatchedProductNames } = reconcileMonthlySalesRows(monthlySalesRows, [
+    ...salesTransactions,
+    ...openingStocks,
+    ...inboundShipments,
+    ...minimumOrderQuantities,
+    ...stockBatches.flatMap((batch) => batch.productName ? [{ sku: batch.sku, productName: batch.productName }] : []),
+  ]);
 
   onProgress?.(`${supplier.name}: дополнительные поля…`);
   const optionalBuffers = optionalSourceKinds
