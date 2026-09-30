@@ -1,7 +1,7 @@
 import type { ReplenishmentInput, ReplenishmentOptions, SkuPlanningConfig } from "./calculation.ts";
-import type { InboundShipment, MinimumOrderQuantity, MonthlyOpeningStock, MonthlySales, SalesTransaction, SkuCategory, SkuCurrentStock, SkuReservation, YearMonth } from "./types.ts";
+import type { InboundShipment, MinimumOrderQuantity, MonthlyOpeningStock, MonthlySales, SalesTransaction, SkuCategory, SkuCurrentStock, SkuReservation, SkuStockBatch, YearMonth } from "./types.ts";
 
-export type ReplenishmentSourceKind = "transactions" | "monthlySales" | "openingStocks" | "inbound" | "moq";
+export type ReplenishmentSourceKind = "transactions" | "monthlySales" | "openingStocks" | "inbound" | "moq" | "stockBatches";
 
 export interface SupplierParsedData {
   supplier: string;
@@ -13,6 +13,8 @@ export interface SupplierParsedData {
   categories?: SkuCategory[];
   reservations?: SkuReservation[];
   currentStocks?: SkuCurrentStock[];
+  /** Batch-level stock (warehouse + shelf life), when the supplier provides it — see aggregateStockBatches. */
+  stockBatches?: SkuStockBatch[];
   /** File kinds not supplied by this supplier; retained for transparent UI disclosure. */
   missingSources?: ReplenishmentSourceKind[];
 }
@@ -35,6 +37,8 @@ export interface AssemblyAssumptions {
   defaultForecastGrowthRate: number;
   forecastGrowthBySku?: Record<string, number>;
   leadTimeBySku?: Record<string, number>;
+  /** Batches at or above this % of shelf life remaining count as available stock; below it, excluded. */
+  shelfLifeValidityThresholdPercent: number;
 }
 
 export const DEFAULT_ASSEMBLY_ASSUMPTIONS: AssemblyAssumptions = {
@@ -44,6 +48,9 @@ export const DEFAULT_ASSEMBLY_ASSUMPTIONS: AssemblyAssumptions = {
   reviewPeriodMonths: 1,
   defaultCategory: "UNCLASSIFIED",
   defaultForecastGrowthRate: 0,
+  // Matches the threshold observed in the one real batch-tracked source seen so far; editable in the UI
+  // since it is that company's own policy, not a universal constant.
+  shelfLifeValidityThresholdPercent: 30,
   // Engineering assumptions until partner-provided service targets exist: top category 98%, middle 95%,
   // lower categories 90%; unclassified SKUs use the neutral 95% target.
   categoryServiceLevel: { "1": 0.98, "2": 0.95, "3": 0.9, "4": 0.9, A: 0.98, B: 0.95, C: 0.9, UNCLASSIFIED: 0.95 },
@@ -52,6 +59,33 @@ export const DEFAULT_ASSEMBLY_ASSUMPTIONS: AssemblyAssumptions = {
 function latestMonth(rows: MonthlyOpeningStock[]): YearMonth | null {
   const months = rows.map((row) => row.month).sort();
   return months.at(-1) ?? null;
+}
+
+/**
+ * Collapses per-batch stock into one currentStock-shaped record per SKU: sums quantity from batches
+ * that pass the shelf-life validity check (no shelf-life data at all counts as valid), keeps the
+ * per-warehouse split and the excluded quantity as informational fields, never subtracted again
+ * downstream — calculateReplenishment treats the returned currentStock as already "clean".
+ */
+function aggregateStockBatches(batches: SkuStockBatch[], thresholdPercent: number): SkuCurrentStock[] {
+  const bySku = new Map<string, { valid: number; excluded: number; byWarehouse: Record<string, number> }>();
+  for (const batch of batches) {
+    const entry = bySku.get(batch.sku) ?? { valid: 0, excluded: 0, byWarehouse: {} };
+    const isValid = !batch.expired && (batch.shelfLifeRemainingPercent == null || batch.shelfLifeRemainingPercent >= thresholdPercent);
+    if (isValid) {
+      entry.valid += batch.quantity;
+      if (batch.warehouse) entry.byWarehouse[batch.warehouse] = (entry.byWarehouse[batch.warehouse] ?? 0) + batch.quantity;
+    } else {
+      entry.excluded += batch.quantity;
+    }
+    bySku.set(batch.sku, entry);
+  }
+  return [...bySku.entries()].map(([sku, agg]) => ({
+    sku,
+    currentStock: agg.valid,
+    ...(Object.keys(agg.byWarehouse).length ? { stockByWarehouse: agg.byWarehouse } : {}),
+    ...(agg.excluded > 0 ? { excludedForShelfLife: agg.excluded } : {}),
+  }));
 }
 
 export function assembleReplenishmentInput(suppliers: SupplierParsedData[], assumptions: AssemblyAssumptions = DEFAULT_ASSEMBLY_ASSUMPTIONS): AssembledReplenishmentInput {
@@ -69,7 +103,14 @@ export function assembleReplenishmentInput(suppliers: SupplierParsedData[], assu
   const salesTransactions = suppliers.flatMap((data) => scoped(data, data.salesTransactions));
   const minimumOrderQuantities = suppliers.flatMap((data) => scoped(data, data.minimumOrderQuantities));
   const reservations = suppliers.flatMap((data) => scoped(data, data.reservations ?? []));
-  const currentStocks = suppliers.flatMap((data) => scoped(data, data.currentStocks ?? []));
+  const currentStocks = suppliers.flatMap((data) => {
+    // Batch-level stock is more granular than a plain snapshot, so where both exist for the same SKU
+    // the batch-derived figure wins; the plain snapshot only fills in SKUs the batches don't cover.
+    const batchDerived = aggregateStockBatches(data.stockBatches ?? [], assumptions.shelfLifeValidityThresholdPercent);
+    const batchSkus = new Set(batchDerived.map((item) => item.sku));
+    const plain = (data.currentStocks ?? []).filter((item) => !batchSkus.has(item.sku));
+    return scoped(data, [...batchDerived, ...plain]);
+  });
   const skuConfigs: SkuPlanningConfig[] = suppliers.flatMap((data) => {
     const categoryBySku = new Map(data.categories?.map((item) => [item.sku, item.category]));
     return [...new Set(data.monthlySales.map((item) => item.sku))].map((sku) => ({

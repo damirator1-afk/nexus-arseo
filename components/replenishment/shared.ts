@@ -8,8 +8,8 @@ import type { ReplenishmentRecommendation } from "../../lib/nexus/replenishment/
 import type { ReplenishmentNarrationInput } from "../../lib/nexus/replenishment/narration.ts";
 import {
   isMissingColumnError, parseInboundShipments, parseMinimumOrderQuantities, parseMonthlyOpeningStock,
-  parseMonthlySales, parseSalesTransactions, parseSkuCategories, parseSkuCostPrices,
-  parseSkuCurrentStocks, parseSkuReservations,
+  parseGroupedMonthlyReport, parseMonthlySales, parseSalesTransactions, parseSkuCategories, parseSkuCostPrices,
+  parseSkuCurrentStocks, parseSkuReservations, parseSkuStockBatches,
 } from "../../lib/nexus/replenishment/xlsxParsers.ts";
 import type { SkuCostPrice, XlsxInput } from "../../lib/nexus/replenishment/types.ts";
 
@@ -27,6 +27,10 @@ export type PlanningControls = {
   serviceLevelB: number;
   serviceLevelC: number;
   unclassifiedServiceLevel: number;
+  /** Batches at or above this % of shelf life remaining count as available stock — see stockBatches upload. */
+  shelfLifeValidityThresholdPercent: number;
+  /** Used only when an uploaded monthly file contains bare month values such as "07". */
+  assumedYearForBareMonths?: number;
 };
 export type DataSource = "demo" | "own";
 
@@ -36,6 +40,7 @@ export const FILE_FIELDS: Array<{ kind: FileKind; label: string; hint: string; m
   { kind: "openingStocks", label: "Остатки по месяцам", hint: "Начальный остаток", missingTreatment: "нет помесячных остатков — используется снимок текущего остатка" },
   { kind: "inbound", label: "Товар в пути", hint: "Поставки, остаток и категории", missingTreatment: "нет товара в пути — считается нулевым" },
   { kind: "moq", label: "MOQ / кратность", hint: "Шаг округления заказа", missingTreatment: "нет MOQ — округление не применяется" },
+  { kind: "stockBatches", label: "Остатки по партиям (срок годности)", hint: "Склад, партия, срок годности — опционально", missingTreatment: "нет данных по партиям — используется обычный остаток" },
 ];
 
 export const createInitialManualSuppliers = (): SupplierDefinition[] => [{ key: "supplier-1", name: "Поставщик 1" }];
@@ -69,6 +74,7 @@ export const DEFAULT_PLANNING: PlanningControls = {
   serviceLevelB: 95,
   serviceLevelC: 90,
   unclassifiedServiceLevel: 95,
+  shelfLifeValidityThresholdPercent: DEFAULT_ASSEMBLY_ASSUMPTIONS.shelfLifeValidityThresholdPercent,
 };
 
 export const number = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 });
@@ -100,6 +106,7 @@ export function validManagerQuantity(quantity: number, moq: number | null): numb
 }
 
 const clampServiceLevel = (percentValue: number): number => Math.min(99.5, Math.max(90, percentValue)) / 100;
+const clampShelfLifeThreshold = (percentValue: number): number => Math.min(100, Math.max(0, Number.isFinite(percentValue) ? percentValue : 0));
 export const csvCell = (value: string | number): string => `"${String(value).replaceAll('"', '""')}"`;
 
 const yieldToBrowser = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -148,21 +155,46 @@ export async function buildSupplierParsedData(
   buffers: Partial<Record<FileKind, Uint8Array>>,
   onProgress?: (label: string) => void,
   optionalSourceKinds?: FileKind[],
+  assumedYearForBareMonths?: number,
 ): Promise<SupplierParsedData> {
   const parseProvided = async <T,>(kind: FileKind, label: string, parser: (input: XlsxInput) => T[]): Promise<T[]> => {
     const buffer = buffers[kind];
     if (!buffer) return [];
     onProgress?.(`${supplier.name}: ${label}…`);
-    const rows = parser(buffer);
+    let rows: T[];
+    try {
+      rows = parser(buffer);
+    } catch (error) {
+      const reason = isMissingColumnError(error)
+        ? "не нашли ожидаемые колонки — проверьте, что это тот файл и в нём есть нужные заголовки (артикул/код 1С, дата, количество и т.д.)"
+        : error instanceof Error ? error.message : "не удалось прочитать файл";
+      throw new Error(`Поставщик «${supplier.name}», файл «${label}»: ${reason}.`);
+    }
     await yieldToBrowser();
     return rows;
   };
 
   const salesTransactions = await parseProvided("transactions", "динамика продаж", parseSalesTransactions);
-  const monthlySales = await parseProvided("monthlySales", "продажи по месяцам", parseMonthlySales);
-  const openingStocks = await parseProvided("openingStocks", "остатки по месяцам", parseMonthlyOpeningStock);
+  const monthlySales = await parseProvided("monthlySales", "продажи по месяцам", (input) => {
+    try {
+      return parseMonthlySales(input, undefined, assumedYearForBareMonths);
+    } catch (ordinaryError) {
+      if (!isMissingColumnError(ordinaryError)) throw ordinaryError;
+      try {
+        return parseGroupedMonthlyReport(input);
+      } catch (groupedError) {
+        const ordinaryReason = ordinaryError instanceof Error ? ordinaryError.message : "неизвестная ошибка";
+        const groupedReason = groupedError instanceof Error ? groupedError.message : "неизвестная ошибка";
+        throw new Error(`Не подошёл ни обычный помесячный формат (${ordinaryReason}), ни иерархический отчёт 1С (${groupedReason})`);
+      }
+    }
+  });
+  const openingStocks = await parseProvided("openingStocks", "остатки по месяцам", (input) => (
+    parseMonthlyOpeningStock(input, undefined, assumedYearForBareMonths)
+  ));
   const inboundShipments = await parseProvided("inbound", "товар в пути", parseInboundShipments);
   const minimumOrderQuantities = await parseProvided("moq", "MOQ и кратность", parseMinimumOrderQuantities);
+  const stockBatches = await parseProvided("stockBatches", "остатки по партиям", parseSkuStockBatches);
 
   onProgress?.(`${supplier.name}: дополнительные поля…`);
   const optionalBuffers = optionalSourceKinds
@@ -173,7 +205,7 @@ export async function buildSupplierParsedData(
   const currentStocks = optionalRowsFromBuffers(optionalBuffers, parseSkuCurrentStocks);
   await yieldToBrowser();
 
-  if (!openingStocks.length && !currentStocks.length) {
+  if (!openingStocks.length && !currentStocks.length && !stockBatches.length) {
     throw new MissingStockSourceError(supplier.key, supplier.name);
   }
 
@@ -187,6 +219,7 @@ export async function buildSupplierParsedData(
     categories,
     reservations,
     currentStocks,
+    stockBatches,
     missingSources: FILE_FIELDS.filter((field) => !buffers[field.kind]).map((field) => field.kind),
   };
 }
@@ -196,11 +229,12 @@ export async function parseSupplierFromFiles(
   supplier: SupplierDefinition,
   files: Partial<Record<FileKind, File>>,
   onProgress?: (label: string) => void,
+  assumedYearForBareMonths?: number,
 ): Promise<SupplierParsedData> {
   const entries = await Promise.all(Object.entries(files).flatMap(([kind, file]) => file
     ? [file.arrayBuffer().then((buffer) => [kind as FileKind, new Uint8Array(buffer)] as const)]
     : []));
-  return buildSupplierParsedData(supplier, Object.fromEntries(entries), onProgress);
+  return buildSupplierParsedData(supplier, Object.fromEntries(entries), onProgress, undefined, assumedYearForBareMonths);
 }
 
 export async function parseSupplierCostPrices(files: Partial<Record<FileKind, File>>): Promise<SkuCostPrice[]> {
@@ -224,6 +258,7 @@ export function buildAssumptions(planning: PlanningControls): AssemblyAssumption
     defaultLeadTimeMonths: Math.max(0.1, planning.leadTimeMonths),
     reviewPeriodMonths: Math.max(0, planning.reviewPeriodMonths),
     defaultForecastGrowthRate: Math.max(-99, planning.forecastGrowthPercent) / 100,
+    shelfLifeValidityThresholdPercent: clampShelfLifeThreshold(planning.shelfLifeValidityThresholdPercent),
     categoryServiceLevel: {
       ...DEFAULT_ASSEMBLY_ASSUMPTIONS.categoryServiceLevel,
       "1": clampServiceLevel(planning.serviceLevelA), A: clampServiceLevel(planning.serviceLevelA),
@@ -239,7 +274,13 @@ export function explanation(item: ReplenishmentRecommendation): string {
   const stockBasis = item.currentStockSource === "explicit_snapshot"
     ? "фактический снимок"
     : `оценка: начальный остаток ${number.format(item.openingStockAsOf)} − продажи ${number.format(item.salesSinceOpening)}`;
-  return `Тип спроса: ${demandPatternLabel[item.demandPattern]}, статус SKU: ${lifecycleLabel[item.stockLifecycleStatus]}, плановый спрос ${number.format(item.planningMonthlyDemand)} ед./мес. Базовый спрос ${number.format(item.baseMonthlyDemand)} ед./мес.; средняя сезонность будущего горизонта ×${number.format(item.seasonalIndex)} (${seasonalPath}); исторический рост ${percent.format(item.historicalGrowthRate)}; внешний прогноз ${percent.format(item.forecastGrowthRate)}. Поправка stockout: +${number.format(item.stockoutAdjustmentUnitsPerMonth)} ед./мес. (${item.stockoutMonths.length} мес.); исключено всплесков: ${item.excludedSpikeCount} на ${number.format(item.excludedSpikeUnits)} ед., оценка влияния на заказ ${number.format(item.spikeOrderImpactEstimate)} ед.; сохранено повторных крупных продаж: ${item.retainedGrowthSpikeCount}. Страховой запас ${number.format(item.safetyStock)} = z ${number.format(item.safetyStockZScore)} × σ ${number.format(item.demandStdDev)} × √горизонта, уровень сервиса ${percent.format(item.serviceLevel)}. Позиция: остаток ${number.format(item.currentStock)} (${stockBasis}) − резерв ${number.format(item.reservedStock)} + подтверждённо в пути ${number.format(item.goodsInTransitWithinHorizon)}; без точного ETA ${number.format(item.goodsInTransitUnknownEta)} не уменьшает заказ, после горизонта ${number.format(item.goodsInTransitAfterHorizon)}; доступный остаток ${number.format(item.availableStock)}, целевой уровень ${number.format(item.targetPosition)}.`;
+  const warehouseNote = item.stockByWarehouse
+    ? ` По складам: ${Object.entries(item.stockByWarehouse).map(([warehouse, qty]) => `${warehouse} ${number.format(qty)}`).join(", ")}.`
+    : "";
+  const shelfLifeNote = item.expiringStockExcluded > 0
+    ? ` Под риском списания (не входит в остаток): ${number.format(item.expiringStockExcluded)} ед.`
+    : "";
+  return `Тип спроса: ${demandPatternLabel[item.demandPattern]}, статус SKU: ${lifecycleLabel[item.stockLifecycleStatus]}, плановый спрос ${number.format(item.planningMonthlyDemand)} ед./мес. Базовый спрос ${number.format(item.baseMonthlyDemand)} ед./мес.; средняя сезонность будущего горизонта ×${number.format(item.seasonalIndex)} (${seasonalPath}); исторический рост ${percent.format(item.historicalGrowthRate)}; внешний прогноз ${percent.format(item.forecastGrowthRate)}. Поправка stockout: +${number.format(item.stockoutAdjustmentUnitsPerMonth)} ед./мес. (${item.stockoutMonths.length} мес.); исключено всплесков: ${item.excludedSpikeCount} на ${number.format(item.excludedSpikeUnits)} ед., оценка влияния на заказ ${number.format(item.spikeOrderImpactEstimate)} ед.; сохранено повторных крупных продаж: ${item.retainedGrowthSpikeCount}. Страховой запас ${number.format(item.safetyStock)} = z ${number.format(item.safetyStockZScore)} × σ ${number.format(item.demandStdDev)} × √горизонта, уровень сервиса ${percent.format(item.serviceLevel)}. Позиция: остаток ${number.format(item.currentStock)} (${stockBasis}) − резерв ${number.format(item.reservedStock)} + подтверждённо в пути ${number.format(item.goodsInTransitWithinHorizon)}; без точного ETA ${number.format(item.goodsInTransitUnknownEta)} не уменьшает заказ, после горизонта ${number.format(item.goodsInTransitAfterHorizon)}; доступный остаток ${number.format(item.availableStock)}, целевой уровень ${number.format(item.targetPosition)}.${warehouseNote}${shelfLifeNote}`;
 }
 
 export function narrationInput(item: ReplenishmentRecommendation): ReplenishmentNarrationInput {

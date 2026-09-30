@@ -72,6 +72,22 @@ export interface SkuCurrentStock {
   sku: string;
   /** Current physical stock snapshot from a supplier dashboard. */
   currentStock: number;
+  /** Present only when the source tracks stock by warehouse (e.g. batch-level data) — informational only, never subtracted twice. */
+  stockByWarehouse?: Record<string, number>;
+  /** Units excluded from currentStock because they failed a shelf-life validity check — informational only. */
+  excludedForShelfLife?: number;
+}
+
+export interface SkuStockBatch {
+  supplier?: string;
+  sku: string;
+  /** Present only when the source distinguishes physical locations. */
+  warehouse?: string;
+  quantity: number;
+  /** null/undefined = shelf life is not tracked for this batch — treated as valid. */
+  shelfLifeRemainingPercent?: number | null;
+  /** True when the source explicitly marks the batch unusable (expired/written off), regardless of percent. */
+  expired?: boolean;
 }
 
 export interface SkuCostPrice {

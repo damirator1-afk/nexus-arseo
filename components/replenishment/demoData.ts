@@ -13,7 +13,9 @@ export const DEMO_SUPPLIERS: Array<SupplierDefinition & { key: DemoSupplierKey }
  * plain byte-identical copies made servable by Next.js.
  */
 const DEMO_DIR: Record<DemoSupplierKey, string> = { iek: "iek", systeme: "systeme-electric" };
-const DEMO_FILENAMES: Record<DemoSupplierKey, Record<FileKind, string>> = {
+// Partial: demo data has no batch-level (stockBatches) source — that file kind is exercised only
+// through the manual-upload path, so it is intentionally absent here for both demo suppliers.
+const DEMO_FILENAMES: Record<DemoSupplierKey, Partial<Record<FileKind, string>>> = {
   iek: {
     transactions: "sales_transactions.xlsx",
     monthlySales: "monthly_sales.xlsx",
@@ -30,7 +32,7 @@ const DEMO_FILENAMES: Record<DemoSupplierKey, Record<FileKind, string>> = {
   },
 };
 
-export async function fetchDemoSupplierBuffers(key: DemoSupplierKey): Promise<Record<FileKind, Uint8Array>> {
+export async function fetchDemoSupplierBuffers(key: DemoSupplierKey): Promise<Partial<Record<FileKind, Uint8Array>>> {
   const entries = await Promise.all(
     Object.entries(DEMO_FILENAMES[key]).map(async ([kind, filename]) => {
       const path = `/demo/replenishment/${DEMO_DIR[key]}/${filename}`;
@@ -39,5 +41,5 @@ export async function fetchDemoSupplierBuffers(key: DemoSupplierKey): Promise<Re
       return [kind as FileKind, new Uint8Array(await response.arrayBuffer())] as const;
     }),
   );
-  return Object.fromEntries(entries) as Record<FileKind, Uint8Array>;
+  return Object.fromEntries(entries) as Partial<Record<FileKind, Uint8Array>>;
 }

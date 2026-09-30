@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import * as XLSX from "xlsx";
 import {
   isMissingColumnError,
+  parseGroupedMonthlyReport,
   parseInboundShipments,
+  parseMonth,
   parseMonthlyOpeningStock,
   parseMonthlySales,
   parseMinimumOrderQuantities,
@@ -11,12 +13,40 @@ import {
   parseSkuCostPrices,
   parseSkuCurrentStocks,
   parseSkuReservations,
+  parseSkuStockBatches,
 } from "./xlsxParsers.ts";
 
 function workbookBytes(rows: unknown[][], sheetName = "Лист_1"): Uint8Array {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), sheetName);
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+}
+
+function groupedReportBytes(period = "Период: 01.09.2026 - 30.09.2026"): Uint8Array {
+  const rows: unknown[][] = [
+    [null, null, null, period],
+    [],
+    ["Подразделение", null, null, null, null, null, null, "Выручка", null, null, "Валовая прибыль", null, "Количество"],
+    ["Клиент.Адрес"],
+    ["Клиент"],
+    ["Номенклатура, Артикул"],
+    ["Клиент Альфа", null, null, null, null, null, null, null, null, null, null, null, 100],
+    ["Ирис, карамельный DUMLE, SKU-1", null, null, null, null, null, null, null, null, null, null, null, 10],
+    ["Шоколад, SKU-2", null, null, null, null, null, null, null, null, null, null, null, -2],
+    ["Клиент Бета", null, null, null, null, null, null, null, null, null, null, null, 50],
+    ["Ирис, карамельный DUMLE, SKU-1", null, null, null, null, null, null, null, null, null, null, null, 5],
+    ["Вафли, SKU-3", null, null, null, null, null, null, null, null, null, null, null, 7],
+  ];
+  const worksheet = XLSX.utils.aoa_to_sheet(rows);
+  worksheet["!rows"] = rows.map((_, index) => (
+    index === 6 || index === 9 ? { level: 2 } : index >= 7 ? { level: 3 } : {}
+  ));
+  worksheet["!merges"] = [
+    { s: { r: 2, c: 12 }, e: { r: 5, c: 13 } },
+  ];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Отчёт");
+  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx", cellStyles: true });
 }
 
 test("missing-column classifier recognizes only the two intentional parser signals", () => {
@@ -57,6 +87,64 @@ test("monthly sales parser understands two-level headers and normalizes blank/Na
   const parsed = parseMonthlySales(bytes);
   assert.deepEqual(parsed.filter((row) => row.sku === "SKU-1").map((row) => [row.month, row.unitsSold]), [["2026-01", 10], ["2026-02", 0]]);
   assert.deepEqual(parsed.filter((row) => row.sku === "SKU-2").map((row) => [row.month, row.unitsSold]), [["2026-01", 0], ["2026-02", 7]]);
+});
+
+test("grouped 1C report parser uses outline levels, keeps returns signed and sums a SKU across clients", () => {
+  assert.deepEqual(parseGroupedMonthlyReport(groupedReportBytes()), [
+    { sku: "SKU-1", productName: "Ирис, карамельный DUMLE", month: "2026-09", unitsSold: 15 },
+    { sku: "SKU-2", productName: "Шоколад", month: "2026-09", unitsSold: -2 },
+    { sku: "SKU-3", productName: "Вафли", month: "2026-09", unitsSold: 7 },
+  ]);
+});
+
+test("grouped 1C report rejects a period spanning more than one calendar month", () => {
+  assert.throws(
+    () => parseGroupedMonthlyReport(groupedReportBytes("Период: 25.09.2026 - 02.10.2026")),
+    /отчёт охватывает больше одного месяца/iu,
+  );
+});
+
+test("bare month needs an explicit assumed year", () => {
+  assert.equal(parseMonth("07"), null);
+  assert.equal(parseMonth("07", 2026), "2026-07");
+});
+
+test("long-form monthly sales with bare months aggregate client rows by SKU and month", () => {
+  const bytes = workbookBytes([
+    ["Месяц", "Клиент", "Артикул", "Номенклатура", "Кол-во"],
+    ["07", "Клиент Альфа", "SKU-1", "Товар один", 10],
+    ["07", "Клиент Бета", "SKU-1", "Товар один", -2],
+    ["08", "Клиент Альфа", "SKU-2", "Товар два", 5],
+  ]);
+  assert.deepEqual(parseMonthlySales(bytes, undefined, 2026), [
+    { sku: "SKU-1", productName: "Товар один", month: "2026-07", unitsSold: 8 },
+    { sku: "SKU-2", productName: "Товар два", month: "2026-08", unitsSold: 5 },
+  ]);
+});
+
+test("monthly parser finds long-form data on a later workbook sheet", () => {
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["Инструкция"], ["Заполните параметры"]]), "Инструкция");
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+    ["Месяц", "Клиент", "Артикул", "Номенклатура", "Кол-во"],
+    ["07", "Клиент Альфа", "SKU-1", "Товар один", 10],
+  ]), "Данные_Продажи");
+  const bytes = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+
+  assert.deepEqual(parseMonthlySales(bytes, undefined, 2026), [
+    { sku: "SKU-1", productName: "Товар один", month: "2026-07", unitsSold: 10 },
+  ]);
+});
+
+test("wide monthly files also accept a bare month header only when a year is supplied", () => {
+  const bytes = workbookBytes([
+    ["Номенклатура", "Артикул", "07"],
+    ["Товар один", "SKU-1", 12],
+  ]);
+  assert.throws(() => parseMonthlySales(bytes), /No monthly columns were found/u);
+  assert.deepEqual(parseMonthlySales(bytes, undefined, 2026), [
+    { sku: "SKU-1", productName: "Товар один", month: "2026-07", unitsSold: 12 },
+  ]);
 });
 
 test("opening-stock parser skips qualifier rows and emits one record per available month column", () => {
@@ -155,4 +243,26 @@ test("cost-price parser reads the dashboard's real-cost column and drops zero/mi
     { sku: "SKU-1", costPrice: 1050.61 },
     { sku: "SKU-3", costPrice: 899.75 },
   ]);
+});
+
+test("stock-batch parser reads warehouse and shelf-life columns, both optional", () => {
+  const bytes = workbookBytes([
+    ["Склад", "Артикул", "Номенклатура", "Годен_до", "Кол-во", "ДнейДоИстечения", "ОСГ_%"],
+    ["Алматы", "SKU-1", "Батончик", "13.01.27", 56, 155, 51],
+    ["Алматы", "SKU-2", "Вафли", "22.07.26", 2, "Не годен", null],
+    ["Астана", "SKU-1", "Батончик", "05.07.26", 18, 98, 12],
+  ]);
+  assert.deepEqual(parseSkuStockBatches(bytes), [
+    { sku: "SKU-1", warehouse: "Алматы", quantity: 56, shelfLifeRemainingPercent: 51 },
+    { sku: "SKU-2", warehouse: "Алматы", quantity: 2, expired: true },
+    { sku: "SKU-1", warehouse: "Астана", quantity: 18, shelfLifeRemainingPercent: 12 },
+  ]);
+});
+
+test("stock-batch parser treats a batch with no shelf-life columns at all as valid, unlabeled quantity", () => {
+  const bytes = workbookBytes([
+    ["Артикул", "Кол-во"],
+    ["SKU-1", 40],
+  ]);
+  assert.deepEqual(parseSkuStockBatches(bytes), [{ sku: "SKU-1", quantity: 40 }]);
 });

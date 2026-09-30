@@ -13,6 +13,7 @@ const EXCEPTION_LABEL: Record<string, string> = {
   surplus: "Избыток",
   slow_stock: "Медленный товар",
   dead_stock: "Мёртвый запас",
+  expiring_stock: "Под риском списания",
 };
 
 function Bar({ label, count, total }: { label: string; count: number; total: number }) {

@@ -47,7 +47,7 @@ export interface ReplenishmentInput {
 
 export type ReplenishmentUrgency = "high" | "medium" | "low";
 export type DemandPattern = "stable" | "volatile" | "intermittent";
-export type ReplenishmentException = "stockout" | "one_off_spike" | "sustained_growth_signal" | "unknown_eta" | "inbound_after_horizon" | "surplus" | "slow_stock" | "dead_stock";
+export type ReplenishmentException = "stockout" | "one_off_spike" | "sustained_growth_signal" | "unknown_eta" | "inbound_after_horizon" | "surplus" | "slow_stock" | "dead_stock" | "expiring_stock";
 export type StockLifecycleStatus = "active" | "slow" | "dead";
 export type CurrentStockSource = "explicit_snapshot" | "projected_from_opening";
 
@@ -86,6 +86,10 @@ export interface ReplenishmentRecommendation {
   salesSinceOpening: number;
   currentStock: number;
   currentStockSource: CurrentStockSource;
+  /** Present only when the stock source tracks physical locations — informational, already summed into currentStock. */
+  stockByWarehouse?: Record<string, number>;
+  /** Units held but excluded from currentStock by a shelf-life validity check — informational, not subtracted again. */
+  expiringStockExcluded: number;
   reservedStock: number;
   availableStock: number;
   goodsInTransitWithinHorizon: number;
@@ -384,6 +388,7 @@ function recommendationForSku(input: ReplenishmentInput, indexed: IndexedInput, 
     : 0;
   const explicitCurrentStock = valueForConfig(indexed.currentStocks, config);
   const currentStockSource: CurrentStockSource = explicitCurrentStock ? "explicit_snapshot" : "projected_from_opening";
+  const expiringStockExcluded = explicitCurrentStock?.excludedForShelfLife ?? 0;
   // Systeme Electric provides an actual dashboard snapshot. IEK does not, so its best auditable estimate
   // rolls the latest opening balance forward by net monthly sales observed since that opening date.
   const currentStock = explicitCurrentStock?.currentStock ?? Math.max(0, openingStockAsOf - salesSinceOpening);
@@ -441,6 +446,7 @@ function recommendationForSku(input: ReplenishmentInput, indexed: IndexedInput, 
     ...(isOverstock ? ["surplus" as const] : []),
     ...(stockLifecycleStatus === "slow" ? ["slow_stock" as const] : []),
     ...(stockLifecycleStatus === "dead" ? ["dead_stock" as const] : []),
+    ...(expiringStockExcluded > 0 ? ["expiring_stock" as const] : []),
   ];
 
   return {
@@ -471,6 +477,8 @@ function recommendationForSku(input: ReplenishmentInput, indexed: IndexedInput, 
     salesSinceOpening: round(salesSinceOpening),
     currentStock: round(currentStock),
     currentStockSource,
+    ...(explicitCurrentStock?.stockByWarehouse ? { stockByWarehouse: explicitCurrentStock.stockByWarehouse } : {}),
+    expiringStockExcluded: round(expiringStockExcluded),
     reservedStock: round(reservedStock),
     availableStock: round(availableStock),
     goodsInTransitWithinHorizon: round(goodsInTransitWithinHorizon),

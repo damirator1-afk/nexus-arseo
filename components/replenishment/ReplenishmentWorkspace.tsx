@@ -136,7 +136,7 @@ export function ReplenishmentWorkspace() {
       if (new Set(names.map((name) => name.toLocaleLowerCase("ru-RU"))).size !== names.length) throw new Error("Названия поставщиков должны быть уникальными.");
 
       const settled = await Promise.allSettled(suppliers.map(async (supplier) => ({
-        parsedData: await parseSupplierFromFiles(supplier, files[supplier.key] ?? {}, setProgress),
+        parsedData: await parseSupplierFromFiles(supplier, files[supplier.key] ?? {}, setProgress, planning.assumedYearForBareMonths),
         prices: await parseSupplierCostPrices(files[supplier.key] ?? {}),
       })));
       const stockErrors: Record<string, string> = {};

@@ -32,6 +32,7 @@ function makeItem(overrides: Partial<ReplenishmentRecommendation> = {}): Repleni
     salesSinceOpening: 5,
     currentStock: 15,
     currentStockSource: "projected_from_opening",
+    expiringStockExcluded: 0,
     reservedStock: 0,
     availableStock: 15,
     goodsInTransitWithinHorizon: 0,

@@ -9,6 +9,7 @@ import type {
   SkuCostPrice,
   SkuCurrentStock,
   SkuReservation,
+  SkuStockBatch,
   XlsxInput,
   YearMonth,
 } from "./types.ts";
@@ -80,6 +81,16 @@ function findHeaderRow(rows: Rows, required: RegExp[], limit = 20): number {
   return index;
 }
 
+/**
+ * Combines several column-name synonyms into one loose (unanchored) pattern, for findHeaderRow only —
+ * that check must still match a compound header cell like "Номенклатура.Код" (normalizes to
+ * "номенклатура код"), so it looks for any synonym as a substring, not an exact whole-cell match.
+ * requireColumn's exact per-column patterns stay anchored; only header-row detection is loosened.
+ */
+function combine(patterns: RegExp[]): RegExp {
+  return new RegExp(patterns.map((pattern) => pattern.source.replace(/^\^/, "").replace(/\$$/, "")).join("|"));
+}
+
 function findColumn(row: Cell[], patterns: RegExp[]): number {
   return row.findIndex((cell) => patterns.some((pattern) => pattern.test(key(cell))));
 }
@@ -100,8 +111,28 @@ export function isMissingColumnError(error: unknown): boolean {
     || error.message.startsWith("Required column was not found:");
 }
 
-function parseMonth(value: Cell): YearMonth | null {
+/**
+ * Shared synonym lists for the handful of columns nearly every parser needs, so recognition is not
+ * limited to IEK/Systeme Electric's own exact 1С wording. Broadens matching, not a substitute for
+ * the manual column-mapping fallback a genuinely unfamiliar file still needs — no fixed list can
+ * anticipate every company's naming, this just shrinks how often that fallback is required.
+ */
+const SKU_PATTERNS = [/^код$/, /^код 1с$/, /^код товара$/, /^код номенклатуры$/, /^номенклатура код$/, /^номенклатурный код$/, /^артикул$/, /^sku$/, /^item code$/, /^product code$/];
+const PRODUCT_NAME_PATTERNS = [/^номенклатура$/, /^наименование$/, /^название$/, /^название товара$/, /^товар$/, /^product$/, /^product name$/, /^name$/, /^item$/];
+const QUANTITY_PATTERNS = [/^количество$/, /^кол во$/, /^qty$/, /^quantity$/, /^amount$/];
+const DATE_PATTERNS = [/^дата$/, /^дата документа$/, /^дата продажи$/, /^date$/];
+const WAREHOUSE_PATTERNS = [/^склад$/, /^warehouse$/];
+/** Percentage of shelf life remaining — an input value from the source file, never computed here. */
+const SHELF_LIFE_REMAINING_PATTERNS = [/^осг$/, /^осг %$/, /^остаток срока годности$/, /^остаток срока годности %$/, /^shelf life$/, /^shelf life %$/];
+/** Days/status column that marks a batch outright unusable when it does not parse as a number. */
+const EXPIRY_STATUS_PATTERNS = [/^днейдоистечения$/, /^дней до истечения$/, /^годен$/, /^статус$/, /^days to expiry$/];
+
+export function parseMonth(value: Cell, assumedYear?: number): YearMonth | null {
   const normalized = key(value);
+  const bareMonth = normalized.match(/^(?:0?[1-9]|1[0-2])$/);
+  if (bareMonth && assumedYear !== undefined && Number.isInteger(assumedYear)) {
+    return `${assumedYear}-${String(Number(bareMonth[0])).padStart(2, "0")}` as YearMonth;
+  }
   const yearMatch = normalized.match(/\b(20\d{2})\b/);
   if (!yearMatch) return null;
   const token = normalized.split(" ").find((part) => MONTHS[part] !== undefined);
@@ -111,16 +142,16 @@ function parseMonth(value: Cell): YearMonth | null {
 
 export function parseSalesTransactions(input: XlsxInput, sheetName?: string): SalesTransaction[] {
   const rows = rowsFromWorkbook(input, sheetName);
-  const headerIndex = findHeaderRow(rows, [/^дата$/, /^код$/, /^количество$/]);
+  const headerIndex = findHeaderRow(rows, [combine(DATE_PATTERNS), combine(SKU_PATTERNS), combine(QUANTITY_PATTERNS)]);
   const header = rows[headerIndex];
-  const date = requireColumn(header, [/^дата$/], "Дата");
-  const invoice = requireColumn(header, [/^номер$/], "Номер");
+  const date = requireColumn(header, DATE_PATTERNS, "Дата");
+  const invoice = requireColumn(header, [/^номер$/, /^номер документа$/, /^invoice$/], "Номер");
   const document = findColumn(header, [/^документ$/]);
-  const sku = requireColumn(header, [/^код$/, /^код 1с$/], "Код");
-  const product = requireColumn(header, [/^номенклатура$/, /^наименование$/], "Номенклатура");
-  const unit = findColumn(header, [/^ед$/, /^единица$/]);
-  const warehouse = findColumn(header, [/^склад$/]);
-  const quantity = requireColumn(header, [/^количество$/], "Количество");
+  const sku = requireColumn(header, SKU_PATTERNS, "Код");
+  const product = requireColumn(header, PRODUCT_NAME_PATTERNS, "Номенклатура");
+  const unit = findColumn(header, [/^ед$/, /^единица$/, /^ед изм$/, /^unit$/]);
+  const warehouse = findColumn(header, [/^склад$/, /^warehouse$/]);
+  const quantity = requireColumn(header, QUANTITY_PATTERNS, "Количество");
 
   return rows.slice(headerIndex + 1).flatMap((row) => {
     const occurredAt = isoDate(row[date]);
@@ -155,15 +186,40 @@ interface MonthlyBase {
   value: number;
 }
 
-function parseMonthly(input: XlsxInput, sheetName?: string): MonthlyBase[] {
-  const rows = rowsFromWorkbook(input, sheetName);
-  const headerIndex = findHeaderRow(rows, [/номенклатур|наименование/, /код/]);
+function parseMonthlyRows(rows: Rows, assumedYear?: number): MonthlyBase[] {
+  const headerIndex = findHeaderRow(rows, [combine(PRODUCT_NAME_PATTERNS), combine(SKU_PATTERNS)]);
   const header = rows[headerIndex];
-  const sku = requireColumn(header, [/^код$/, /^номенклатура код$/, /номенклатурн.*код/, /^код 1с$/], "SKU code");
-  const product = requireColumn(header, [/^номенклатура$/, /^наименование$/], "product name");
-  const unit = findColumn(header, [/^ед$/, /^ед ед$/, /^единица$/]);
+  const sku = requireColumn(header, [...SKU_PATTERNS, /номенклатурн.*код/], "SKU code");
+  const product = requireColumn(header, PRODUCT_NAME_PATTERNS, "product name");
+  const unit = findColumn(header, [/^ед$/, /^ед ед$/, /^единица$/, /^unit$/]);
+  const rowMonth = findColumn(header, [/^месяц$/, /^month$/]);
+  const rowQuantity = findColumn(header, QUANTITY_PATTERNS);
+
+  // Some customer exports are in long form: one client/SKU/month per row rather than one month per
+  // column. Aggregate them here because the calculation contract requires a single demand value per
+  // SKU/month; treating client rows as consecutive months would distort seasonality and volatility.
+  if (rowMonth >= 0 && rowQuantity >= 0) {
+    const aggregated = new Map<string, MonthlyBase>();
+    for (const row of rows.slice(headerIndex + 1)) {
+      const month = parseMonth(row[rowMonth], assumedYear);
+      const skuValue = text(row[sku]);
+      if (!month || !skuValue) continue;
+      const mapKey = `${skuValue}\u0000${month}`;
+      const current = aggregated.get(mapKey);
+      aggregated.set(mapKey, {
+        sku: skuValue,
+        productName: current?.productName || text(row[product]),
+        ...(unit >= 0 && text(row[unit]) ? { unit: text(row[unit]) } : {}),
+        month,
+        value: (current?.value ?? 0) + (numberValue(row[rowQuantity]) ?? 0),
+      });
+    }
+    if (!aggregated.size) throw new Error("No monthly columns were found.");
+    return [...aggregated.values()];
+  }
+
   const monthColumns = header.flatMap((cell, index) => {
-    const month = parseMonth(cell);
+    const month = parseMonth(cell, assumedYear);
     return month ? [{ index, month }] : [];
   });
   if (!monthColumns.length) throw new Error("No monthly columns were found.");
@@ -189,12 +245,102 @@ function parseMonthly(input: XlsxInput, sheetName?: string): MonthlyBase[] {
   });
 }
 
-export function parseMonthlySales(input: XlsxInput, sheetName?: string): MonthlySales[] {
-  return parseMonthly(input, sheetName).map(({ value, ...row }) => ({ ...row, unitsSold: value }));
+function parseMonthly(input: XlsxInput, sheetName?: string, assumedYear?: number): MonthlyBase[] {
+  const workbook = XLSX.read(input, { type: "array", cellDates: true });
+  const candidates = sheetName ? [sheetName] : workbook.SheetNames;
+  let candidateError: unknown;
+  for (const candidate of candidates) {
+    const worksheet = workbook.Sheets[candidate];
+    if (!worksheet) {
+      if (sheetName) throw new Error(`Worksheet not found: ${sheetName}`);
+      continue;
+    }
+    const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: true, defval: null }) as Rows;
+    try {
+      return parseMonthlyRows(rows, assumedYear);
+    } catch (error) {
+      if (sheetName) throw error;
+      // A customer workbook may start with instructions or calculated output and keep raw monthly
+      // data on a later sheet. Only structural mismatches are candidates for trying the next sheet.
+      if (!isMissingColumnError(error) && !(error instanceof Error && error.message === "No monthly columns were found.")) throw error;
+      candidateError = error;
+    }
+  }
+  if (candidateError instanceof Error) throw candidateError;
+  throw new Error("Required XLSX headers were not found.");
 }
 
-export function parseMonthlyOpeningStock(input: XlsxInput, sheetName?: string): MonthlyOpeningStock[] {
-  return parseMonthly(input, sheetName).map(({ value, ...row }) => ({ ...row, openingStock: value }));
+export function parseMonthlySales(input: XlsxInput, sheetName?: string, assumedYear?: number): MonthlySales[] {
+  return parseMonthly(input, sheetName, assumedYear).map(({ value, ...row }) => ({ ...row, unitsSold: value }));
+}
+
+export function parseMonthlyOpeningStock(input: XlsxInput, sheetName?: string, assumedYear?: number): MonthlyOpeningStock[] {
+  return parseMonthly(input, sheetName, assumedYear).map(({ value, ...row }) => ({ ...row, openingStock: value }));
+}
+
+/**
+ * Parses a grouped 1C "gross profit" report as one month of SKU demand. Unlike the ordinary tabular
+ * parsers this must retain worksheet outline and merge metadata, hence the direct SheetJS access and
+ * `cellStyles: true` below.
+ */
+export function parseGroupedMonthlyReport(input: XlsxInput, sheetName?: string): MonthlySales[] {
+  const workbook = XLSX.read(input, { type: "array", cellDates: true, cellStyles: true });
+  const selected = sheetName ?? workbook.SheetNames[0];
+  const worksheet = selected ? workbook.Sheets[selected] : undefined;
+  if (!selected || !worksheet) throw new Error(`Worksheet not found: ${selected ?? "<first>"}`);
+
+  const range = XLSX.utils.decode_range(worksheet["!ref"] ?? "A1:A1");
+  const cellAt = (row: number, column: number): Cell => worksheet[XLSX.utils.encode_cell({ r: row, c: column })]?.v as Cell;
+  const periodPattern = /период:?\s*(\d{2})\.(\d{2})\.(\d{4})\s*-\s*(\d{2})\.(\d{2})\.(\d{4})/iu;
+  let periodMatch: RegExpMatchArray | null = null;
+  for (let row = range.s.r; row <= Math.min(range.e.r, 14) && !periodMatch; row += 1) {
+    for (let column = range.s.c; column <= range.e.c && !periodMatch; column += 1) {
+      periodMatch = text(cellAt(row, column)).match(periodPattern);
+    }
+  }
+  if (!periodMatch) throw new Error("Не удалось найти период отчёта в первых 15 строках.");
+  const [, , startMonth, startYear, , endMonth, endYear] = periodMatch;
+  if (startMonth !== endMonth || startYear !== endYear) {
+    throw new Error("Отчёт охватывает больше одного месяца, такой файл пока не поддерживается для этого источника.");
+  }
+  const monthNumber = Number(startMonth);
+  if (monthNumber < 1 || monthNumber > 12) throw new Error("В периоде отчёта указан некорректный месяц.");
+  const month = `${startYear}-${startMonth}` as YearMonth;
+
+  const quantityMerge = (worksheet["!merges"] ?? []).find((merge) => (
+    QUANTITY_PATTERNS.some((pattern) => pattern.test(key(cellAt(merge.s.r, merge.s.c))))
+  ));
+  if (!quantityMerge) throw new Error("Не удалось найти объединённый заголовок колонки «Количество».");
+
+  const rowMetadata = worksheet["!rows"];
+  const dataStart = quantityMerge.e.r + 1;
+  let leafLevel: number | undefined;
+  for (let row = dataStart; row <= range.e.r; row += 1) {
+    const level = rowMetadata?.[row]?.level;
+    if (typeof level === "number" && (leafLevel === undefined || level > leafLevel)) leafLevel = level;
+  }
+  if (leafLevel === undefined) throw new Error("Не удалось определить уровни группировки строк отчёта.");
+
+  const aggregated = new Map<string, MonthlySales>();
+  for (let row = dataStart; row <= range.e.r; row += 1) {
+    if (rowMetadata?.[row]?.level !== leafLevel) continue;
+    let label = "";
+    for (let column = range.s.c; column <= range.e.c && !label; column += 1) label = text(cellAt(row, column));
+    const separator = label.lastIndexOf(",");
+    if (separator < 0) continue;
+    const productName = label.slice(0, separator).trim();
+    const sku = label.slice(separator + 1).trim();
+    const unitsSold = numberValue(cellAt(row, quantityMerge.s.c));
+    if (!productName || !sku || unitsSold === null) continue;
+    const current = aggregated.get(sku);
+    aggregated.set(sku, {
+      sku,
+      productName: current?.productName || productName,
+      month,
+      unitsSold: (current?.unitsSold ?? 0) + unitsSold,
+    });
+  }
+  return [...aggregated.values()];
 }
 
 function expectedDateFromHeader(header: Cell): string | null {
@@ -205,10 +351,10 @@ function expectedDateFromHeader(header: Cell): string | null {
 
 export function parseInboundShipments(input: XlsxInput, sheetName?: string): InboundShipment[] {
   const rows = rowsFromWorkbook(input, sheetName);
-  const headerIndex = findHeaderRow(rows, [/код 1с/, /наименование/]);
+  const headerIndex = findHeaderRow(rows, [combine(SKU_PATTERNS), combine(PRODUCT_NAME_PATTERNS)]);
   const header = rows[headerIndex];
-  const sku = requireColumn(header, [/^код 1с$/], "Код 1с");
-  const product = requireColumn(header, [/^наименование$/], "Наименование");
+  const sku = requireColumn(header, SKU_PATTERNS, "Код 1с");
+  const product = requireColumn(header, PRODUCT_NAME_PATTERNS, "Наименование");
   const supplierArticle = findColumn(header, [/^артикул(?: поставщика| иэк)?$/]);
   const shipmentColumns = header.flatMap((cell, index) => {
     const label = text(cell);
@@ -241,12 +387,12 @@ export function parseInboundShipments(input: XlsxInput, sheetName?: string): Inb
 
 export function parseMinimumOrderQuantities(input: XlsxInput, sheetName?: string): MinimumOrderQuantity[] {
   const rows = rowsFromWorkbook(input, sheetName);
-  const headerIndex = findHeaderRow(rows, [/код/, /кратность|мин разр к отгр/]);
+  const headerIndex = findHeaderRow(rows, [combine(SKU_PATTERNS), /кратность|мин разр к отгр|moq/]);
   const header = rows[headerIndex];
-  const sku = requireColumn(header, [/^код 1с$/, /^номенклатура код$/, /номенклатурн.*код/], "SKU code");
-  const product = requireColumn(header, [/^номенклатура$/, /^наименование$/], "product name");
+  const sku = requireColumn(header, [...SKU_PATTERNS, /номенклатурн.*код/], "SKU code");
+  const product = requireColumn(header, PRODUCT_NAME_PATTERNS, "product name");
   const supplierArticle = findColumn(header, [/^артикул(?: поставщика)?$/]);
-  const multiple = requireColumn(header, [/^кратность$/, /^мин разр к отгр$/], "MOQ/order multiple");
+  const multiple = requireColumn(header, [/^кратность$/, /^мин разр к отгр$/, /^moq$/, /^кратность заказа$/], "MOQ/order multiple");
 
   return rows.slice(headerIndex + 1).flatMap((row) => {
     const skuValue = text(row[sku]);
@@ -319,5 +465,41 @@ export function parseSkuCostPrices(input: XlsxInput, sheetName?: string): SkuCos
     const skuValue = text(row[sku]);
     const priceValue = numberValue(row[price]);
     return skuValue && priceValue !== null && priceValue > 0 ? [{ sku: skuValue, costPrice: priceValue }] : [];
+  });
+}
+
+/**
+ * Reads batch-level stock — one row per lot, optionally per warehouse and shelf-life status. Warehouse
+ * and shelf-life columns are both optional (findColumn, not requireColumn): a file with neither is still
+ * a useful flat stock source, just without the per-warehouse breakdown or expiry-based exclusion.
+ *
+ * Validity mirrors the source convention this was modelled on: an unparseable expiry-status cell (any
+ * non-numeric "days remaining" value, e.g. a literal "expired" marker in whatever wording the company
+ * uses) marks the batch unusable outright; otherwise a present shelf-life percentage below the caller's
+ * threshold (applied later, in assemble.ts) excludes it; a batch with no shelf-life data at all is valid.
+ */
+export function parseSkuStockBatches(input: XlsxInput, sheetName?: string): SkuStockBatch[] {
+  const rows = rowsFromWorkbook(input, sheetName);
+  const headerIndex = findHeaderRow(rows, [combine(SKU_PATTERNS), combine(QUANTITY_PATTERNS)]);
+  const header = rows[headerIndex];
+  const sku = requireColumn(header, SKU_PATTERNS, "SKU code");
+  const quantity = requireColumn(header, QUANTITY_PATTERNS, "Количество");
+  const warehouse = findColumn(header, WAREHOUSE_PATTERNS);
+  const shelfLifePercent = findColumn(header, SHELF_LIFE_REMAINING_PATTERNS);
+  const expiryStatus = findColumn(header, EXPIRY_STATUS_PATTERNS);
+
+  return rows.slice(headerIndex + 1).flatMap((row) => {
+    const skuValue = text(row[sku]);
+    const quantityValue = numberValue(row[quantity]);
+    if (!skuValue || quantityValue === null || quantityValue <= 0) return [];
+    const expired = expiryStatus >= 0 && numberValue(row[expiryStatus]) === null && text(row[expiryStatus]) !== "";
+    const percentValue = shelfLifePercent >= 0 ? numberValue(row[shelfLifePercent]) : null;
+    return [{
+      sku: skuValue,
+      ...(warehouse >= 0 && text(row[warehouse]) ? { warehouse: text(row[warehouse]) } : {}),
+      quantity: quantityValue,
+      ...(percentValue !== null ? { shelfLifeRemainingPercent: percentValue } : {}),
+      ...(expired ? { expired: true } : {}),
+    }];
   });
 }

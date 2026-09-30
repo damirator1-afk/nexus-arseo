@@ -147,6 +147,8 @@ export function UploadGate(props: {
       <label><span>Сервис B / кат. 2, %</span><input type="number" min="90" max="99.5" step="0.1" value={planning.serviceLevelB} onChange={(event) => setPlanning((current) => ({ ...current, serviceLevelB: Number(event.target.value) }))} /></label>
       <label><span>Сервис C / кат. 3–4, %</span><input type="number" min="90" max="99.5" step="0.1" value={planning.serviceLevelC} onChange={(event) => setPlanning((current) => ({ ...current, serviceLevelC: Number(event.target.value) }))} /></label>
       <label><span>Сервис без категории, %</span><input type="number" min="90" max="99.5" step="0.1" value={planning.unclassifiedServiceLevel} onChange={(event) => setPlanning((current) => ({ ...current, unclassifiedServiceLevel: Number(event.target.value) }))} /></label>
+      <label><span>Годен от ОСГ, %</span><input type="number" min="0" max="100" step="1" value={planning.shelfLifeValidityThresholdPercent} onChange={(event) => setPlanning((current) => ({ ...current, shelfLifeValidityThresholdPercent: Number(event.target.value) }))} /></label>
+      <label><span>Год для месяцев без указания года (если применимо)</span><input type="number" min="1900" max="9999" step="1" value={planning.assumedYearForBareMonths ?? ""} onChange={(event) => setPlanning((current) => ({ ...current, assumedYearForBareMonths: event.target.value ? Number(event.target.value) : undefined }))} /></label>
     </fieldset>
 
     {mode === "manual" && <div className={styles.runbar}>

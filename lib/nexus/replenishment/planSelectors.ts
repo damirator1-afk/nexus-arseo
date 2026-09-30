@@ -18,7 +18,7 @@ const LIFECYCLE_KEYS: StockLifecycleStatus[] = ["active", "slow", "dead"];
 const DEMAND_PATTERN_KEYS: DemandPattern[] = ["stable", "volatile", "intermittent"];
 const EXCEPTION_KEYS: ReplenishmentException[] = [
   "stockout", "one_off_spike", "sustained_growth_signal", "unknown_eta",
-  "inbound_after_horizon", "surplus", "slow_stock", "dead_stock",
+  "inbound_after_horizon", "surplus", "slow_stock", "dead_stock", "expiring_stock",
 ];
 
 function zeroRecord<K extends string>(keys: K[]): Record<K, number> {
