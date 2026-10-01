@@ -205,6 +205,60 @@ test("exact normalized product name links an uncoded grouped row to a coded file
   assert.equal(parsed.unmatchedProductNames, undefined);
 });
 
+test("reordered product words link an uncoded report row to one authoritative SKU", async () => {
+  const parsed = await buildSupplierParsedData({ key: "word-order", name: "Word order" }, {
+    monthlySales: [uncodedGroupedMonthlyReportBytes("FAZER Rye crispbread rosemary 200g", 9)],
+    openingStocks: [workbookBytes([
+      ["Номенклатура", "Артикул", "март 2026"],
+      [null, null, "нач. остаток"],
+      ["Rye crispbread rosemary FAZER 200g", "SKU-200", 20],
+    ])],
+  });
+
+  assert.deepEqual(parsed.monthlySales, [
+    { sku: "SKU-200", productName: "FAZER Rye crispbread rosemary 200g", month: "2026-03", unitsSold: 9 },
+  ]);
+  assert.equal(parsed.unmatchedProductNames, undefined);
+});
+
+test("small spelling mistakes link only when one authoritative SKU is clearly closest", async () => {
+  const parsed = await buildSupplierParsedData({ key: "small-typo", name: "Small typo" }, {
+    monthlySales: [uncodedGroupedMonthlyReportBytes("Premium chocolate cookie without palm oill galbusero 220g", 7)],
+    openingStocks: [workbookBytes([
+      ["Номенклатура", "Артикул", "март 2026"],
+      [null, null, "нач. остаток"],
+      ["PREMIUM CHOCOLATE COOKIE WITHOUT PALM OIL GALBUSERA 220g", "SKU-220", 15],
+      ["PREMIUM HONEY COOKIE WITHOUT PALM OIL GALBUSERA 220g", "SKU-HONEY", 15],
+    ])],
+  });
+
+  assert.deepEqual(parsed.monthlySales, [
+    { sku: "SKU-220", productName: "Premium chocolate cookie without palm oill galbusero 220g", month: "2026-03", unitsSold: 7 },
+  ]);
+  assert.equal(parsed.unmatchedProductNames, undefined);
+});
+
+test("name matching never guesses across pack sizes or ambiguous authoritative SKUs", async () => {
+  const packMismatch = "FAZER Rye crispbread rosemary 330g";
+  const ambiguousName = "FAZER Rye crispbread 200g";
+  const parsed = await buildSupplierParsedData({ key: "blocked-match", name: "Blocked match" }, {
+    monthlySales: [
+      uncodedGroupedMonthlyReportBytes(packMismatch, 5),
+      uncodedGroupedMonthlyReportBytes(ambiguousName, 6),
+    ],
+    openingStocks: [workbookBytes([
+      ["Номенклатура", "Артикул", "март 2026"],
+      [null, null, "нач. остаток"],
+      ["Rye crispbread rosemary FAZER 200g", "SKU-200", 20],
+      ["Rye crispbread FAZER 200g", "SKU-A", 20],
+      ["Rye FAZER crispbread 200g", "SKU-B", 20],
+    ])],
+  });
+
+  assert.deepEqual(parsed.monthlySales, []);
+  assert.deepEqual(parsed.unmatchedProductNames, [packMismatch, ambiguousName]);
+});
+
 test("unknown no-SKU product is excluded from demand and disclosed explicitly", async () => {
   const parsed = await buildSupplierParsedData({ key: "name-miss", name: "Без пары" }, {
     monthlySales: [

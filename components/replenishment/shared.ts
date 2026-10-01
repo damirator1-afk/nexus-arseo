@@ -154,6 +154,112 @@ function normalizedProductName(value: string): string {
   return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("ru-RU");
 }
 
+function comparableProductName(value: string): string {
+  return normalizedProductName(value)
+    .replace(/ё/gu, "е")
+    .replace(/[^a-zа-я0-9]+/giu, " ")
+    .trim()
+    .replace(/\s+/gu, " ");
+}
+
+function productTokenSignature(value: string): string {
+  return comparableProductName(value).split(" ").filter(Boolean).sort().join(" ");
+}
+
+function productNumberSignature(value: string): string {
+  return (normalizedProductName(value).match(/\d+(?:[.,]\d+)?/gu) ?? [])
+    .map((numberToken) => numberToken.replace(",", "."))
+    .sort()
+    .join("|");
+}
+
+function levenshteinSimilarity(leftValue: string, rightValue: string): number {
+  const left = comparableProductName(leftValue);
+  const right = comparableProductName(rightValue);
+  if (left === right) return 1;
+  if (!left || !right) return 0;
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    let diagonal = previous[0];
+    previous[0] = leftIndex;
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const old = previous[rightIndex];
+      previous[rightIndex] = Math.min(
+        previous[rightIndex] + 1,
+        previous[rightIndex - 1] + 1,
+        diagonal + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+      );
+      diagonal = old;
+    }
+  }
+  return 1 - previous[right.length] / Math.max(left.length, right.length);
+}
+
+type IdentityResolution = { found: boolean; sku: string | null };
+type ProductIdentityIndex = {
+  byName: Map<string, string | null>;
+  byTokenSignature: Map<string, string | null>;
+  candidates: Array<{ sku: string; productName: string; numberSignature: string }>;
+};
+
+function buildProductIdentityIndex(identities: Array<{ sku: string; productName: string }>): ProductIdentityIndex {
+  const byName = new Map<string, string | null>();
+  const byTokenSignature = new Map<string, string | null>();
+  const candidates = new Map<string, { sku: string; productName: string; numberSignature: string }>();
+  const addIdentity = (map: Map<string, string | null>, identityKey: string, sku: string): void => {
+    if (!identityKey) return;
+    const existing = map.get(identityKey);
+    if (!map.has(identityKey)) map.set(identityKey, sku);
+    else if (existing !== sku) map.set(identityKey, null);
+  };
+
+  for (const identity of identities) {
+    const normalizedName = normalizedProductName(identity.productName);
+    const comparableName = comparableProductName(identity.productName);
+    if (!normalizedName || !comparableName) continue;
+    addIdentity(byName, normalizedName, identity.sku);
+    addIdentity(byTokenSignature, productTokenSignature(identity.productName), identity.sku);
+    candidates.set(`${identity.sku}\u0000${comparableName}`, {
+      sku: identity.sku,
+      productName: identity.productName,
+      numberSignature: productNumberSignature(identity.productName),
+    });
+  }
+  return { byName, byTokenSignature, candidates: [...candidates.values()] };
+}
+
+function resolveProductIdentity(productName: string, index: ProductIdentityIndex, allowFuzzy = true): IdentityResolution {
+  const normalizedName = normalizedProductName(productName);
+  if (index.byName.has(normalizedName)) return { found: true, sku: index.byName.get(normalizedName) ?? null };
+
+  // Word order and punctuation are presentation details in the customer's reports. A token signature
+  // still requires the complete same set of words and numeric attributes, and conflicting SKUs remain blocked.
+  const tokenSignature = productTokenSignature(productName);
+  if (index.byTokenSignature.has(tokenSignature)) {
+    return { found: true, sku: index.byTokenSignature.get(tokenSignature) ?? null };
+  }
+
+  // A coded row already has a usable identity. Typo recovery is only needed for the no-SKU reports
+  // and avoiding it here keeps large 3,000+ SKU demo/customer runs linear for the common path.
+  if (!allowFuzzy) return { found: false, sku: null };
+  const comparableName = comparableProductName(productName);
+  if (comparableName.length < 20 || comparableName.split(" ").length < 3) return { found: false, sku: null };
+  const numberSignature = productNumberSignature(productName);
+  const bestBySku = new Map<string, number>();
+  for (const candidate of index.candidates) {
+    // Weight, pack size and every other numeric characteristic must agree before typo tolerance is considered.
+    if (candidate.numberSignature !== numberSignature) continue;
+    const score = levenshteinSimilarity(productName, candidate.productName);
+    bestBySku.set(candidate.sku, Math.max(bestBySku.get(candidate.sku) ?? 0, score));
+  }
+  const ranked = [...bestBySku.entries()].sort((left, right) => right[1] - left[1]);
+  const best = ranked[0];
+  if (!best || best[1] < 0.94) return { found: false, sku: null };
+  const runnerUpScore = ranked[1]?.[1] ?? 0;
+  if (best[1] - runnerUpScore < 0.03) return { found: true, sku: null };
+  return { found: true, sku: best[0] };
+}
+
 function reconcileMonthlySalesRows(
   rows: GroupedMonthlyRow[],
   authoritativeIdentities: Array<{ sku: string; productName: string }> = [],
@@ -161,41 +267,36 @@ function reconcileMonthlySalesRows(
   monthlySales: MonthlySales[];
   unmatchedProductNames: string[];
 } {
-  const buildIdentityMap = (identities: Array<{ sku: string; productName: string }>): Map<string, string | null> => {
-    const result = new Map<string, string | null>();
-    for (const identity of identities) {
-      const normalizedName = normalizedProductName(identity.productName);
-      if (!normalizedName) continue;
-      const existing = result.get(normalizedName);
-      if (!result.has(normalizedName)) result.set(normalizedName, identity.sku);
-      else if (existing !== identity.sku) result.set(normalizedName, null);
-    }
-    return result;
-  };
-
   // Stock, transaction, inbound and MOQ files carry the supplier's operational SKU identity. Some
   // sales exports put an EAN barcode in their "Артикул" column instead. An exact-name authoritative
-  // match therefore canonicalizes both coded and uncoded sales rows to the operational SKU; conflicts
-  // inside the authoritative sources remain blocked rather than guessed.
-  const authoritativeSkuByName = buildIdentityMap(authoritativeIdentities);
-  const monthlySkuByName = buildIdentityMap(rows.flatMap((row) => (
+  // match therefore canonicalizes both coded and uncoded sales rows to the operational SKU. The
+  // conservative extensions above also tolerate reordered words and very small typos, but only when
+  // numeric attributes agree and one SKU is clearly better; conflicts remain blocked rather than guessed.
+  const authoritativeIndex = buildProductIdentityIndex(authoritativeIdentities);
+  const monthlyIndex = buildProductIdentityIndex(rows.flatMap((row) => (
     row.sku ? [{ sku: row.sku, productName: row.productName }] : []
   )));
 
+  const resolutionCache = new Map<string, IdentityResolution>();
+
   const resolvedSku = (productName: string): string | null => {
     const normalizedName = normalizedProductName(productName);
-    return authoritativeSkuByName.has(normalizedName)
-      ? authoritativeSkuByName.get(normalizedName) ?? null
-      : monthlySkuByName.get(normalizedName) ?? null;
+    const cached = resolutionCache.get(normalizedName);
+    if (cached) return cached.sku;
+    const authoritativeResolution = resolveProductIdentity(productName, authoritativeIndex);
+    const resolution = authoritativeResolution.found
+      ? authoritativeResolution
+      : resolveProductIdentity(productName, monthlyIndex);
+    resolutionCache.set(normalizedName, resolution);
+    return resolution.sku;
   };
 
   const matched: MonthlySales[] = [];
   const unmatched = new Map<string, string>();
   for (const row of rows) {
     if (row.sku) {
-      const normalizedName = normalizedProductName(row.productName);
-      const authoritativeSku = authoritativeSkuByName.get(normalizedName);
-      matched.push({ ...row, sku: authoritativeSku || row.sku });
+      const authoritativeResolution = resolveProductIdentity(row.productName, authoritativeIndex, false);
+      matched.push({ ...row, sku: authoritativeResolution.sku || row.sku });
       continue;
     }
     const normalizedName = normalizedProductName(row.productName);
