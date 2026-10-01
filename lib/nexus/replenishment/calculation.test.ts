@@ -63,7 +63,7 @@ test("criterion 1 — changing category changes category safety stock and the re
   assert.notEqual(first(categoryA).recommendedOrder, first(categoryB).recommendedOrder);
 });
 
-test("criterion 1 — changing partner forecast growth changes the recommendation", () => {
+test("criterion 1 — changing external forecast growth changes the recommendation", () => {
   const baseline = baseInput();
   const changed = baseInput();
   changed.skuConfigs[0] = { ...changed.skuConfigs[0], forecastGrowthRate: 0.2 };

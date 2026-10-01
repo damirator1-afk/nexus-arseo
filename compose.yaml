@@ -1,9 +1,9 @@
 services:
-  nexus:
+  nexus-arseo:
     build:
       context: .
       dockerfile: Dockerfile
-    image: nexus-electrokomplekt:local
+    image: nexus-arseo:local
     init: true
     restart: unless-stopped
     ports:

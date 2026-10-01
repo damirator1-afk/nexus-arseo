@@ -113,7 +113,7 @@ export function isMissingColumnError(error: unknown): boolean {
 
 /**
  * Shared synonym lists for the handful of columns nearly every parser needs, so recognition is not
- * limited to IEK/Systeme Electric's own exact 1С wording. Broadens matching, not a substitute for
+ * limited to one export's exact 1С wording. Broadens matching, not a substitute for
  * the manual column-mapping fallback a genuinely unfamiliar file still needs — no fixed list can
  * anticipate every company's naming, this just shrinks how often that fallback is required.
  */
@@ -427,7 +427,7 @@ export function parseInboundShipments(input: XlsxInput, sheetName?: string): Inb
   const header = rows[headerIndex];
   const sku = requireColumn(header, SKU_PATTERNS, "Код 1с");
   const product = requireColumn(header, PRODUCT_NAME_PATTERNS, "Наименование");
-  const supplierArticle = findColumn(header, [/^артикул(?: поставщика| иэк)?$/]);
+  const supplierArticle = findColumn(header, [/^артикул(?: поставщика)?$/]);
   const shipmentColumns = header.flatMap((cell, index) => {
     const label = text(cell);
     const normalized = key(cell);
@@ -479,7 +479,7 @@ export function parseMinimumOrderQuantities(input: XlsxInput, sheetName?: string
   });
 }
 
-/** Reads partner-provided category metadata when it exists (currently the Systeme Electric dashboard). */
+/** Reads category metadata when the source workbook provides it. */
 export function parseSkuCategories(input: XlsxInput, sheetName?: string): SkuCategory[] {
   const rows = rowsFromWorkbook(input, sheetName);
   const headerIndex = findHeaderRow(rows, [/код 1с/, /категория/]);
@@ -492,7 +492,7 @@ export function parseSkuCategories(input: XlsxInput, sheetName?: string): SkuCat
   });
 }
 
-/** Reads customer-reserved stock from the Systeme Electric dashboard. IEK has no equivalent source. */
+/** Reads customer-reserved stock when the source workbook provides it. */
 export function parseSkuReservations(input: XlsxInput, sheetName?: string): SkuReservation[] {
   const rows = rowsFromWorkbook(input, sheetName);
   const headerIndex = findHeaderRow(rows, [/код 1с/, /^зарезервировано$/]);
@@ -522,9 +522,8 @@ export function parseSkuCurrentStocks(input: XlsxInput, sheetName?: string): Sku
 }
 
 /**
- * Reads per-unit cost price ("СС реал") when the supplier dashboard exposes one — currently only
- * Systeme Electric's export. IEK has no price column anywhere in its files; calling this against
- * an IEK workbook throws (no "сс реал" header to find), so callers only invoke it per-supplier.
+ * Reads per-unit cost price (including the supported "СС реал" header) when a source workbook
+ * exposes one. Workbooks without a recognized price column are skipped by optional-source callers.
  * Presentation-only: never fed into assembleReplenishmentInput/calculateReplenishment.
  */
 export function parseSkuCostPrices(input: XlsxInput, sheetName?: string): SkuCostPrice[] {

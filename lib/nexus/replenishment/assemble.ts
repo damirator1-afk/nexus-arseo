@@ -53,7 +53,7 @@ export const DEFAULT_ASSEMBLY_ASSUMPTIONS: AssemblyAssumptions = {
   // Matches the threshold observed in the one real batch-tracked source seen so far; editable in the UI
   // since it is that company's own policy, not a universal constant.
   shelfLifeValidityThresholdPercent: 30,
-  // Engineering assumptions until partner-provided service targets exist: top category 98%, middle 95%,
+  // Engineering defaults until configured service targets exist: top category 98%, middle 95%,
   // lower categories 90%; unclassified SKUs use the neutral 95% target.
   categoryServiceLevel: { "1": 0.98, "2": 0.95, "3": 0.9, "4": 0.9, A: 0.98, B: 0.95, C: 0.9, UNCLASSIFIED: 0.95 },
 };

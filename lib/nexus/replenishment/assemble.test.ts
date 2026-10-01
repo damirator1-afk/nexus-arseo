@@ -11,13 +11,13 @@ const supplier = (name: string, sku: string, month: "2026-08" | "2026-09", categ
   inboundShipments: [{ sku, productName: sku, shipmentId: "S", expectedDate: null, quantity: 2 }],
   salesTransactions: [{ sku, productName: sku, invoiceNumber: "I", occurredAt: `${month}-01T00:00:00Z`, unitsSold: 10, sourceQuantity: -10 }],
   minimumOrderQuantities: [{ sku, productName: sku, multiple: 4 }],
-  reservations: name === "Systeme Electric" ? [{ sku, reservedStock: 2 }] : [],
-  currentStocks: name === "Systeme Electric" ? [{ sku, currentStock: 17 }] : [],
+  reservations: name === "Supplier B" ? [{ sku, reservedStock: 2 }] : [],
+  currentStocks: name === "Supplier B" ? [{ sku, currentStock: 17 }] : [],
   ...(category ? { categories: [{ sku, category }] } : {}),
 });
 
 test("assembly combines both suppliers and derives the freshest stock month", () => {
-  const result = assembleReplenishmentInput([supplier("IEK", "I-1", "2026-08"), supplier("Systeme Electric", "S-1", "2026-09", "2")]);
+  const result = assembleReplenishmentInput([supplier("Supplier A", "A-1", "2026-08"), supplier("Supplier B", "B-1", "2026-09", "2")]);
   assert.equal(result.monthlySales.length, 2);
   assert.equal(result.openingStocks.length, 2);
   assert.equal(result.inboundShipments.length, 2);
@@ -25,25 +25,25 @@ test("assembly combines both suppliers and derives the freshest stock month", ()
   assert.equal(result.minimumOrderQuantities?.length, 2);
   assert.equal(result.reservations?.length, 1);
   assert.equal(result.currentStocks?.length, 1);
-  assert.equal(result.monthlySales[0].supplier, "IEK");
-  assert.equal(result.monthlySales[1].supplier, "Systeme Electric");
+  assert.equal(result.monthlySales[0].supplier, "Supplier A");
+  assert.equal(result.monthlySales[1].supplier, "Supplier B");
   assert.equal(result.options.asOfMonth, "2026-09");
 });
 
-test("assembly uses partner category and documented IEK/default assumptions without inventing forecast growth", () => {
-  const result = assembleReplenishmentInput([supplier("IEK", "I-1", "2026-08"), supplier("Systeme Electric", "S-1", "2026-09", "2")]);
+test("assembly uses supplied categories and documented defaults without inventing forecast growth", () => {
+  const result = assembleReplenishmentInput([supplier("Supplier A", "A-1", "2026-08"), supplier("Supplier B", "B-1", "2026-09", "2")]);
   assert.deepEqual(result.skuConfigs, [
-    { sku: "I-1", supplier: "IEK", category: "UNCLASSIFIED", forecastGrowthRate: 0 },
-    { sku: "S-1", supplier: "Systeme Electric", category: "2", forecastGrowthRate: 0 },
+    { sku: "A-1", supplier: "Supplier A", category: "UNCLASSIFIED", forecastGrowthRate: 0 },
+    { sku: "B-1", supplier: "Supplier B", category: "2", forecastGrowthRate: 0 },
   ]);
   assert.equal(result.options.defaultLeadTimeMonths, DEFAULT_ASSEMBLY_ASSUMPTIONS.defaultLeadTimeMonths);
 });
 
 test("assembly accepts explicit external growth and lead-time overrides", () => {
-  const result = assembleReplenishmentInput([supplier("IEK", "I-1", "2026-08")], {
+  const result = assembleReplenishmentInput([supplier("Supplier A", "A-1", "2026-08")], {
     ...DEFAULT_ASSEMBLY_ASSUMPTIONS,
-    forecastGrowthBySku: { "I-1": 0.12 },
-    leadTimeBySku: { "I-1": 3 },
+    forecastGrowthBySku: { "A-1": 0.12 },
+    leadTimeBySku: { "A-1": 3 },
   });
   assert.equal(result.skuConfigs[0].forecastGrowthRate, 0.12);
   assert.equal(result.skuConfigs[0].leadTimeMonths, 3);
@@ -90,7 +90,7 @@ test("a supplier with sales, transactions and stock still calculates without inb
 });
 
 test("batch stock sums valid quantity per SKU and per warehouse, excluding below-threshold and expired batches", () => {
-  const partial = supplier("Продукты ТОО", "SKU-1", "2026-09");
+  const partial = supplier("Supplier A", "SKU-1", "2026-09");
   partial.currentStocks = [];
   partial.stockBatches = [
     { sku: "SKU-1", warehouse: "Алматы", quantity: 56, shelfLifeRemainingPercent: 51 },
@@ -109,7 +109,7 @@ test("batch stock sums valid quantity per SKU and per warehouse, excluding below
 });
 
 test("batch-derived stock takes precedence over a plain snapshot for the same SKU, plain fills the rest", () => {
-  const partial = supplier("Продукты ТОО", "SKU-1", "2026-09");
+  const partial = supplier("Supplier A", "SKU-1", "2026-09");
   partial.currentStocks = [{ sku: "SKU-1", currentStock: 999 }, { sku: "SKU-2", currentStock: 30 }];
   partial.stockBatches = [{ sku: "SKU-1", quantity: 65, shelfLifeRemainingPercent: 80 }];
   const result = assembleReplenishmentInput([partial]);
@@ -121,7 +121,7 @@ test("batch-derived stock takes precedence over a plain snapshot for the same SK
 });
 
 test("expiring-stock exclusion and warehouse breakdown reach the final recommendation without affecting the order math twice", () => {
-  const partial = supplier("Продукты ТОО", "SKU-1", "2026-09");
+  const partial = supplier("Supplier A", "SKU-1", "2026-09");
   partial.currentStocks = [];
   partial.stockBatches = [
     { sku: "SKU-1", warehouse: "Алматы", quantity: 56, shelfLifeRemainingPercent: 51 },

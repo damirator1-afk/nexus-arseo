@@ -5,9 +5,4 @@ out/
 !.env.example
 *.tsbuildinfo
 .claude/
-
-# Working copies of the partner's case files — the canonical, published copy lives at
-# demo/data/replenishment/ (byte-identical, committed); ignoring these avoids duplicating ~15 MB.
-/IEK/
-/Systeme electric/
 .vercel

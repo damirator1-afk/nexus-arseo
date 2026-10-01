@@ -10,7 +10,7 @@ export interface SalesTransaction {
   productName: string;
   unit?: string;
   warehouse?: string;
-  /** Absolute quantity sold. Partner exports switch sign convention between years. */
+  /** Absolute quantity sold. Source exports may use different sign conventions. */
   unitsSold: number;
   /** Original signed value retained for auditability. */
   sourceQuantity: number;
@@ -96,10 +96,9 @@ export interface SkuCostPrice {
   supplier?: string;
   sku: string;
   /**
-   * Per-unit cost price ("СС реал"), currently only exposed by Systeme Electric's dashboard
-   * export (724 of 3017 combined SKUs). IEK's source files carry no price field at all —
-   * this is presentation-only data (order sums for display), never used by the replenishment
-   * calculation itself, so its absence for most SKUs never blocks or skews a recommendation.
+   * Per-unit cost price when exposed by a source workbook. This is presentation-only data
+   * (order sums for display), never used by the replenishment calculation itself, so a missing
+   * price never blocks or skews a recommendation.
    */
   costPrice: number;
 }

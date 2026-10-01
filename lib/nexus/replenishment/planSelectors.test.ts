@@ -7,7 +7,7 @@ function makeItem(overrides: Partial<ReplenishmentRecommendation> = {}): Repleni
   return {
     sku: "SKU-1",
     productName: "Test SKU",
-    supplier: "IEK",
+    supplier: "Supplier A",
     category: "A",
     baseMonthlyDemand: 10,
     rawMonthlyDemand: 10,
@@ -69,9 +69,9 @@ function makeItem(overrides: Partial<ReplenishmentRecommendation> = {}): Repleni
 
 test("summarizePlan counts every SKU exactly once across all buckets", () => {
   const items = [
-    makeItem({ sku: "A", urgency: "high", stockLifecycleStatus: "active", demandPattern: "stable", recommendedOrder: 10, supplier: "IEK" }),
-    makeItem({ sku: "B", urgency: "medium", stockLifecycleStatus: "slow", demandPattern: "volatile", recommendedOrder: 5, supplier: "IEK", exceptions: ["slow_stock"] }),
-    makeItem({ sku: "C", urgency: "low", stockLifecycleStatus: "dead", demandPattern: "intermittent", recommendedOrder: 0, supplier: "Systeme Electric", exceptions: ["dead_stock", "stockout"] }),
+    makeItem({ sku: "A", urgency: "high", stockLifecycleStatus: "active", demandPattern: "stable", recommendedOrder: 10, supplier: "Supplier A" }),
+    makeItem({ sku: "B", urgency: "medium", stockLifecycleStatus: "slow", demandPattern: "volatile", recommendedOrder: 5, supplier: "Supplier A", exceptions: ["slow_stock"] }),
+    makeItem({ sku: "C", urgency: "low", stockLifecycleStatus: "dead", demandPattern: "intermittent", recommendedOrder: 0, supplier: "Supplier B", exceptions: ["dead_stock", "stockout"] }),
   ];
   const summary = summarizePlan(items);
   assert.equal(summary.totalSkuCount, 3);
@@ -87,14 +87,14 @@ test("summarizePlan counts every SKU exactly once across all buckets", () => {
 
 test("summarizePlan groups supplier totals and sums recommended units per supplier", () => {
   const items = [
-    makeItem({ sku: "A", supplier: "IEK", recommendedOrder: 10 }),
-    makeItem({ sku: "B", supplier: "IEK", recommendedOrder: 5 }),
-    makeItem({ sku: "C", supplier: "Systeme Electric", recommendedOrder: 7 }),
+    makeItem({ sku: "A", supplier: "Supplier A", recommendedOrder: 10 }),
+    makeItem({ sku: "B", supplier: "Supplier A", recommendedOrder: 5 }),
+    makeItem({ sku: "C", supplier: "Supplier B", recommendedOrder: 7 }),
   ];
   const summary = summarizePlan(items);
   assert.deepEqual(summary.supplierTotals, [
-    { supplier: "IEK", skuCount: 2, recommendedUnits: 15 },
-    { supplier: "Systeme Electric", skuCount: 1, recommendedUnits: 7 },
+    { supplier: "Supplier A", skuCount: 2, recommendedUnits: 15 },
+    { supplier: "Supplier B", skuCount: 1, recommendedUnits: 7 },
   ]);
 });
 

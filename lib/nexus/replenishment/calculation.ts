@@ -13,7 +13,7 @@ export interface SkuPlanningConfig {
   sku: string;
   supplier: string;
   category: string;
-  /** Partner/planner forecast expressed as a decimal rate: 0.10 means +10%. */
+  /** Planner-provided forecast expressed as a decimal rate: 0.10 means +10%. */
   forecastGrowthRate: number;
   leadTimeMonths?: number;
 }
@@ -382,18 +382,18 @@ function recommendationForSku(input: ReplenishmentInput, indexed: IndexedInput, 
   const latestOpeningRow = stockRows.at(-1);
   const openingStockAsOf = latestOpeningRow?.openingStock ?? 0;
   const salesSinceOpening = latestOpeningRow
-    // A negative monthly net value represents returns/adjustments. Without an authoritative IEK current
-    // snapshot, do not let that uncertain movement inflate available stock and suppress an order.
+    // A negative monthly net value represents returns/adjustments. Without an authoritative current
+    // stock snapshot, do not let that uncertain movement inflate available stock and suppress an order.
     ? Math.max(0, sales.filter((item) => item.month >= latestOpeningRow.month).reduce((sum, item) => sum + item.unitsSold, 0))
     : 0;
   const explicitCurrentStock = valueForConfig(indexed.currentStocks, config);
   const currentStockSource: CurrentStockSource = explicitCurrentStock ? "explicit_snapshot" : "projected_from_opening";
   const expiringStockExcluded = explicitCurrentStock?.excludedForShelfLife ?? 0;
-  // Systeme Electric provides an actual dashboard snapshot. IEK does not, so its best auditable estimate
-  // rolls the latest opening balance forward by net monthly sales observed since that opening date.
+  // Prefer an explicit stock snapshot when supplied. Otherwise, the best auditable estimate rolls the
+  // latest opening balance forward by net monthly sales observed since that opening date.
   const currentStock = explicitCurrentStock?.currentStock ?? Math.max(0, openingStockAsOf - salesSinceOpening);
   const reservedStock = valueForConfig(indexed.reservations, config)?.reservedStock ?? 0;
-  // IEK has no reservation field in the supplied files, so its documented fallback is zero reservation.
+  // When no reservation source is supplied, the documented fallback is zero reserved stock.
   const availableStock = Math.max(0, currentStock - reservedStock);
   const horizonEnd = endOfMonth(addMonths(options.asOfMonth, Math.ceil(horizonMonths)));
   const skuInbound = rowsForConfig(indexed.inbound, config);
@@ -514,7 +514,7 @@ function recommendationForSku(input: ReplenishmentInput, indexed: IndexedInput, 
 
 export function calculateReplenishment(input: ReplenishmentInput): ReplenishmentPlan {
   validateInput(input);
-  // Build each index once. Real partner workbooks contain hundreds of thousands of transactions; repeated
+  // Build each index once. Large workbooks can contain hundreds of thousands of transactions; repeated
   // whole-array filtering per SKU would make the browser workflow quadratic and unsuitable for Vercel.
   const indexed: IndexedInput = {
     sales: groupBySku(input.monthlySales),

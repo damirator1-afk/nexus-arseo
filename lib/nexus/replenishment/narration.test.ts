@@ -10,7 +10,7 @@ import {
 const recommendation: ReplenishmentNarrationInput = {
   sku: "SKU-42",
   productName: "Автоматический выключатель",
-  supplier: "Systeme Electric",
+  supplier: "Supplier A",
   category: "A",
   baseMonthlyDemand: 12.5,
   seasonalIndex: 1.2,

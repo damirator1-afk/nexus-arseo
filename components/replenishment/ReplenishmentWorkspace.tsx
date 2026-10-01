@@ -5,12 +5,11 @@ import { assembleReplenishmentInput, type ReplenishmentAssemblyMetadata } from "
 import { calculateReplenishment, type ReplenishmentPlan, type ReplenishmentRecommendation } from "@/lib/nexus/replenishment/calculation";
 import type { ConfirmedOrderLine } from "@/lib/nexus/replenishment/orderShare";
 import { summarizePlan } from "@/lib/nexus/replenishment/planSelectors";
-import { DEMO_SUPPLIERS, fetchDemoSupplierBuffers } from "./demoData";
 import {
-  buildAssumptions, buildSupplierParsedData, createInitialManualSuppliers, csvCell, DEFAULT_PLANNING, matchesExceptionView,
-  MissingStockSourceError, narrationInput, parseSupplierCostPrices, parseSupplierCostPricesFromBuffers,
+  buildAssumptions, createInitialManualSuppliers, csvCell, DEFAULT_PLANNING, matchesExceptionView,
+  MissingStockSourceError, narrationInput, parseSupplierCostPrices,
   parseSupplierFromFiles, supplierSkuKey, urgencyRank,
-  type DataSource, type ExceptionView, type FilesState, type ManagerDecision, type PlanningControls, type SupplierDefinition,
+  type ExceptionView, type FilesState, type ManagerDecision, type PlanningControls, type SupplierDefinition,
 } from "./shared";
 import { UploadGate } from "./UploadGate";
 import { ThemeToggle } from "./ThemeToggle";
@@ -22,7 +21,6 @@ import { MethodologyTab } from "./tabs/MethodologyTab";
 import styles from "./replenishment.module.css";
 
 type Tab = "today" | "orders" | "calendar" | "analytics" | "methodology";
-type Mode = "demo" | "manual";
 
 const TABS: Array<{ key: Tab; label: string }> = [
   { key: "today", label: "Что делать сегодня" },
@@ -39,9 +37,7 @@ export function ReplenishmentWorkspace() {
   const [files, setFiles] = useState<FilesState>(() => Object.fromEntries(createInitialManualSuppliers().map((supplier) => [supplier.key, {}])));
   const [supplierErrors, setSupplierErrors] = useState<Record<string, string>>({});
   const [unmatchedProductNames, setUnmatchedProductNames] = useState<Record<string, string[]>>({});
-  const [mode, setMode] = useState<Mode>("demo");
   const [plan, setPlan] = useState<ReplenishmentPlan>();
-  const [dataSource, setDataSource] = useState<DataSource>();
   const [assemblyMetadata, setAssemblyMetadata] = useState<ReplenishmentAssemblyMetadata>();
   // Supplier/SKU -> per-unit cost price, presentation-only (never fed into
   // assembleReplenishmentInput/calculateReplenishment). Discovered opportunistically in any
@@ -105,33 +101,6 @@ export function ReplenishmentWorkspace() {
     URL.revokeObjectURL(url);
   };
 
-  const runDemo = async () => {
-    setRunning(true); setError(""); setProgress("Загружаем файлы партнёра…");
-    try {
-      // Real partner workbooks run to hundreds of thousands of rows; parsing all 10 files as one
-      // uninterrupted block would freeze clicks/repaints for 10+ seconds. Parsing yields between
-      // steps (see buildSupplierParsedData) and reports progress here so the tab stays responsive
-      // and visibly working instead of looking stuck.
-      const results = await Promise.all(DEMO_SUPPLIERS.map(async (supplier) => {
-        const buffers = await fetchDemoSupplierBuffers(supplier.key);
-        const parsedData = await buildSupplierParsedData(supplier, buffers, setProgress, ["inbound"]);
-        const prices = parseSupplierCostPricesFromBuffers({ inbound: buffers.inbound });
-        return { parsedData, prices };
-      }));
-      setProgress("Считаем рекомендации по 3000+ позициям…");
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      const assembled = assembleReplenishmentInput(results.map((r) => r.parsedData), buildAssumptions(planning));
-      setPlan(calculateReplenishment(assembled));
-      setAssemblyMetadata({ missingSources: assembled.missingSources, asOfMonthSource: assembled.asOfMonthSource });
-      setCostPrices(new Map(results.flatMap((result) => result.prices.map((price) => [supplierSkuKey(result.parsedData.supplier, price.sku), price.costPrice] as const))));
-      setUnmatchedProductNames({});
-      setDataSource("demo"); setDecisions({}); setExceptionView("all"); setActiveTab("today");
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Не удалось загрузить демо-данные на реальных файлах партнёра.");
-      setMode("manual");
-    } finally { setRunning(false); setProgress(""); }
-  };
-
   const runManual = async () => {
     setRunning(true); setError(""); setSupplierErrors({}); setUnmatchedProductNames({}); setProgress("Читаем выбранные файлы…");
     try {
@@ -167,23 +136,21 @@ export function ReplenishmentWorkspace() {
         setError("Проверьте источники остатка у отмеченных поставщиков.");
         return;
       }
-      setProgress("Считаем рекомендации по 3000+ позициям…");
+      setProgress("Считаем рекомендации по загруженным позициям…");
       await new Promise((resolve) => setTimeout(resolve, 0));
       const assembled = assembleReplenishmentInput(parsed, buildAssumptions(planning));
       setPlan(calculateReplenishment(assembled));
       setAssemblyMetadata({ missingSources: assembled.missingSources, asOfMonthSource: assembled.asOfMonthSource });
       setCostPrices(new Map(prices.map((price) => [supplierSkuKey(price.supplier, price.sku), price.costPrice] as const)));
-      setDataSource("own"); setDecisions({}); setExceptionView("all"); setActiveTab("today");
+      setDecisions({}); setExceptionView("all"); setActiveTab("today");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Не удалось обработать XLSX-файлы.");
     } finally { setRunning(false); setProgress(""); }
   };
 
-  const onGateRun = (requestedMode: Mode) => { if (requestedMode === "demo") void runDemo(); else void runManual(); };
-
   const onNewCalculation = () => {
-    setPlan(undefined); setDataSource(undefined); setAssemblyMetadata(undefined); setDecisions({}); setExceptionView("all");
-    setQuery(""); setFocusSku(null); setMode("manual"); setActiveTab("today");
+    setPlan(undefined); setAssemblyMetadata(undefined); setDecisions({}); setExceptionView("all");
+    setQuery(""); setFocusSku(null); setActiveTab("today");
   };
 
   const onOpenSku = (sku: string) => {
@@ -216,22 +183,23 @@ export function ReplenishmentWorkspace() {
       <a href="/" className={styles.brand}>
         {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset, no next/image usage elsewhere in this app */}
         <img src="/brand/nexus-logo.png" alt="Nexus" className={styles.brandLogo} width={1481} height={411} />
-        <small className={styles.brandTagline}>Автозаказ</small>
+        <small className={styles.brandTagline}>Arseo · Автозаказ</small>
       </a>
-      <div style={{ marginLeft: "auto" }}><ThemeToggle shellRef={shellRef} /></div>
+      <div className={styles.topbarTools}>
+        <span className={styles.engineState}><i aria-hidden="true" />Расчётный контур</span>
+        <ThemeToggle shellRef={shellRef} />
+      </div>
     </header>
 
     <div className={styles.ctx}>
       <span className={styles.ctxItem}>Расчёт <b>детерминированный</b></span>
       <span className={styles.ctxItem}>Срок поставки <b>{planning.leadTimeMonths} мес.</b></span>
       <span className={styles.ctxItem}>Период пересмотра <b>{planning.reviewPeriodMonths} мес.</b></span>
-      {plan && <span className={styles.ctxItem}>Данные <b>{dataSource === "demo" ? "демо на реальных файлах" : "свои файлы"}</b></span>}
+      {plan && <span className={styles.ctxItem}>Данные <b>загруженные документы</b></span>}
       {plan && <span className={styles.ctxItem}>Расчёт на <b>{plan.asOfMonth}</b></span>}
     </div>
 
     {!plan && <UploadGate
-      mode={mode}
-      onModeChange={setMode}
       suppliers={suppliers}
       setSuppliers={setSuppliers}
       files={files}
@@ -247,7 +215,7 @@ export function ReplenishmentWorkspace() {
       progress={progress}
       ready={ready}
       selectedCount={selectedCount}
-      onRun={onGateRun}
+      onRun={() => void runManual()}
     />}
 
     {plan && <div className={styles.uploadArea}>
@@ -263,7 +231,7 @@ export function ReplenishmentWorkspace() {
         </p>)}
       </div>}
 
-      {activeTab === "today" && <TodayTab plan={plan} summary={summary} dataSource={dataSource ?? "own"} costPrices={costPrices} onOpenSku={onOpenSku} onNewCalculation={onNewCalculation} />}
+      {activeTab === "today" && <TodayTab plan={plan} summary={summary} costPrices={costPrices} onOpenSku={onOpenSku} onNewCalculation={onNewCalculation} />}
       {activeTab === "orders" && <OrdersTab
         plan={plan}
         visible={visible}
@@ -287,6 +255,6 @@ export function ReplenishmentWorkspace() {
       {activeTab === "methodology" && <MethodologyTab planning={planning} missingSources={assemblyMetadata?.missingSources ?? {}} asOfMonthSource={assemblyMetadata?.asOfMonthSource ?? "opening_stocks"} />}
     </div>}
 
-    <footer className={styles.footer}><span>Nexus · управление пополнением</span><span>Проверяемая модель · без скрытых вычислений</span></footer>
+    <footer className={styles.footer}><span>Nexus Arseo · управление пополнением</span><span>Проверяемая модель · без скрытых вычислений</span></footer>
   </main>;
 }

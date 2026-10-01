@@ -13,11 +13,7 @@ import {
 } from "./shared";
 import styles from "./replenishment.module.css";
 
-type Mode = "demo" | "manual";
-
 export function UploadGate(props: {
-  mode: Mode;
-  onModeChange: (mode: Mode) => void;
   suppliers: SupplierDefinition[];
   setSuppliers: Dispatch<SetStateAction<SupplierDefinition[]>>;
   files: FilesState;
@@ -33,10 +29,10 @@ export function UploadGate(props: {
   progress: string;
   ready: boolean;
   selectedCount: number;
-  onRun: (mode: Mode) => void;
+  onRun: () => void;
 }) {
   const {
-    mode, onModeChange, suppliers, setSuppliers, files, setFiles, supplierErrors, setSupplierErrors,
+    suppliers, setSuppliers, files, setFiles, supplierErrors, setSupplierErrors,
     unmatchedProductNames, setUnmatchedProductNames,
     planning, setPlanning, error, running, progress, ready, selectedCount, onRun,
   } = props;
@@ -87,27 +83,16 @@ export function UploadGate(props: {
   };
 
   return <section className={styles.uploadArea} aria-label="Загрузка исходных данных">
-    <div className={styles.gateActions}>
-      <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} disabled={running} onClick={() => { onModeChange("demo"); onRun("demo"); }}>
-        {running && mode === "demo" ? "Загружаем демо…" : "Посмотреть демо на реальных данных"}
-      </button>
-      <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} disabled={running} onClick={() => onModeChange("manual")}>Загрузить свои документы</button>
+    <div className={styles.sectionHead}>
+      <div><p>Nexus Arseo</p><h2>Новый расчёт пополнения</h2></div>
+      <b>{selectedCount} файлов · {suppliers.length} поставщиков</b>
     </div>
 
     {running
       ? <div className={styles.empty}>{progress || "Загрузка данных…"}</div>
-      : <p className={styles.gateHint}>
-          {mode === "demo"
-            ? "Демо использует реальные выгрузки IEK и Systeme Electric. Расчёт начнётся только после нажатия кнопки — все данные обрабатываются в браузере."
-            : "Добавьте поставщиков и загрузите доступные XLSX. Обязателен только источник остатка; остальные файлы можно пропустить."}
-        </p>}
+      : <p className={styles.gateHint}>Добавьте поставщиков и загрузите доступные XLSX. Обязателен только источник остатка; остальные файлы можно пропустить. Все документы обрабатываются локально в браузере.</p>}
 
-    {mode === "manual" && !running && <>
-      <div className={styles.sectionHead}>
-        <div><p>Входные данные</p><h2>Поставщики и доступные источники</h2></div>
-        <b>{selectedCount} файлов · {suppliers.length} поставщиков</b>
-      </div>
-
+    {!running && <>
       <div className={styles.addSupplierRow}>
         <label>
           <span>Название поставщика</span>
@@ -115,7 +100,7 @@ export function UploadGate(props: {
             value={newSupplierName}
             onChange={(event) => setNewSupplierName(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addSupplier(); } }}
-            placeholder="Например, Schneider Central Asia"
+            placeholder="Например, Поставщик А"
           />
         </label>
         <button type="button" className={`${styles.btn} ${styles.btnGhost}`} disabled={!newSupplierName.trim()} onClick={addSupplier}>+ Добавить поставщика</button>
@@ -204,10 +189,10 @@ export function UploadGate(props: {
       <label><span>Год для месяцев без указания года (если применимо)</span><input type="number" min="1900" max="9999" step="1" value={planning.assumedYearForBareMonths ?? ""} onChange={(event) => setPlanning((current) => ({ ...current, assumedYearForBareMonths: event.target.value ? Number(event.target.value) : undefined }))} /></label>
     </fieldset>
 
-    {mode === "manual" && <div className={styles.runbar}>
+    <div className={styles.runbar}>
       <div><span>Все вычисления выполняются локально в браузере</span><small>Файлы не отправляются во внешние сервисы; при первом запуске проверим наличие источника остатка</small></div>
-      <button className={`${styles.btn} ${styles.btnPrimary}`} disabled={!ready || running} onClick={() => onRun("manual")}>{running ? "Обработка…" : "Рассчитать заказы →"}</button>
-    </div>}
+      <button className={`${styles.btn} ${styles.btnPrimary}`} disabled={!ready || running} onClick={onRun}>{running ? "Обработка…" : "Рассчитать заказы →"}</button>
+    </div>
 
     {error && <p className={styles.error} role="alert">{error}</p>}
   </section>;

@@ -3,7 +3,7 @@
 import type { ReplenishmentPlan, ReplenishmentRecommendation } from "@/lib/nexus/replenishment/calculation";
 import type { PlanAggregate } from "@/lib/nexus/replenishment/planSelectors";
 import { AlertIcon, BoxIcon, ClockIcon, CoinIcon } from "../icons";
-import { money, number, supplierSkuKey, urgencyLabel, urgencyRank, type DataSource } from "../shared";
+import { money, number, supplierSkuKey, urgencyLabel, urgencyRank } from "../shared";
 import styles from "../replenishment.module.css";
 
 const urgencyRankOf = (item: ReplenishmentRecommendation) => urgencyRank[item.urgency];
@@ -11,7 +11,6 @@ const urgencyRankOf = (item: ReplenishmentRecommendation) => urgencyRank[item.ur
 export function TodayTab(props: {
   plan: ReplenishmentPlan;
   summary: PlanAggregate;
-  dataSource: DataSource;
   costPrices: Map<string, number>;
   onOpenSku: (sku: string) => void;
   onNewCalculation: () => void;
@@ -50,7 +49,7 @@ export function TodayTab(props: {
       </div>
       <div className={`${styles.kpi} ${styles.tPlan}`}>
         <div className={styles.kTop}><div className={styles.kLabel}>Стоимость заказа</div><div className={styles.kIco}><CoinIcon size={20} /></div></div>
-        <div className={`${styles.kValue} ${styles.num}`}>{priced.length ? money(knownOrderValue) : "Нет данных"}</div>
+        <div className={`${styles.kValue} ${styles.moneyValue} ${styles.num}`}>{priced.length ? money(knownOrderValue) : "Нет данных"}</div>
         <div className={styles.kSub}>известна цена у {priced.length} из {orderingCount} позиций к заказу</div>
       </div>
       {summary.supplierTotals.map((supplierTotal) => (

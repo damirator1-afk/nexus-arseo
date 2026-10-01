@@ -61,7 +61,7 @@ export function OrdersTab(props: {
       <div className={`${styles.kpi} ${styles.tCrit}`}><div className={styles.kTop}><div className={styles.kLabel}>Срочных</div><div className={styles.kIco}><AlertIcon size={20} /></div></div><div className={`${styles.kValue} ${styles.num}`}>{allItems.filter((item) => item.urgency === "high").length}</div></div>
       <div className={`${styles.kpi} ${styles.tPlan}`}>
         <div className={styles.kTop}><div className={styles.kLabel}>Сумма заказа</div><div className={styles.kIco}><CoinIcon size={20} /></div></div>
-        <div className={`${styles.kValue} ${styles.num}`}>{pricedOrdering.length ? money(knownOrderValue) : "Нет данных"}</div>
+        <div className={`${styles.kValue} ${styles.moneyValue} ${styles.num}`}>{pricedOrdering.length ? money(knownOrderValue) : "Нет данных"}</div>
         <div className={styles.kSub}>цена известна у {pricedOrdering.length} позиций из тех, что к заказу</div>
       </div>
     </div>
@@ -89,12 +89,16 @@ export function OrdersTab(props: {
           const decision = decisions[narrativeKey] ?? { quantity: item.recommendedOrder, status: "draft" as const };
           const { cls: pillCls, Icon: PillIcon } = URGENCY_PILL[item.urgency];
           const costPrice = costPrices.get(supplierSkuKey(item.supplier, item.sku));
-          return <tr key={item.sku} ref={focusSku === item.sku ? (node) => node?.scrollIntoView({ block: "center", behavior: "smooth" }) : undefined}>
+          const rowTone = item.urgency === "high" ? styles.rowCritical : item.urgency === "medium" ? styles.rowSoon : styles.rowPlanned;
+          const hasStockoutGap = item.potentialStockoutDays !== null && item.potentialStockoutDays > 0;
+          const timelineTone = !item.nearestInboundExpectedDate ? styles.timelineUnknown : hasStockoutGap ? styles.timelineRisk : styles.timelineSafe;
+          const timelineStatus = !item.nearestInboundExpectedDate ? "ETA не указан" : hasStockoutGap ? `${item.potentialStockoutDays} дн. риска` : "без разрыва";
+          return <tr className={rowTone} key={item.sku} ref={focusSku === item.sku ? (node) => node?.scrollIntoView({ block: "center", behavior: "smooth" }) : undefined}>
             <td>
               <span className={`${styles.pill} ${pillCls}`}><PillIcon size={12} />{urgencyLabel[item.urgency]}</span>
             </td>
-            <td>
-              <b>{item.sku}</b><small>{item.productName}</small>
+            <td className={styles.productCell}>
+              <b className={styles.skuCode}>{item.sku}</b><small>{item.productName}</small>
               <span className={styles.pattern}>{demandPatternLabel[item.demandPattern]}</span>
               {item.stockLifecycleStatus !== "active" && <span className={`${styles.pattern} ${styles.lifecycleWarning}`}>{lifecycleLabel[item.stockLifecycleStatus]}</span>}
             </td>
@@ -106,19 +110,43 @@ export function OrdersTab(props: {
             </td>
             <td>{costPrice !== undefined ? <b className={styles.num}>{money(costPrice * item.recommendedOrder)}</b> : <small>нет данных</small>}</td>
             <td><b className={styles.num}>{item.daysOfSupply === null ? "—" : `${Math.round(item.daysOfSupply)} дн.`}</b><small>{item.daysOfSupply === null ? "Нет текущего спроса" : `товара хватит до ${item.projectedStockoutDate ?? "—"}`}</small></td>
-            <td><details open={focusSku === item.sku}><summary>Показать расчёт</summary>
-              <p>{explanation(item)}</p>
-              {item.potentialStockoutDays !== null && item.potentialStockoutDays > 0 && <p className={styles.stockoutRisk}>Остаток закончится {item.projectedStockoutDate}, ближайшая поставка ожидается {item.nearestInboundExpectedDate}: {item.potentialStockoutDays} дн. потенциального дефицита.</p>}
+            <td><details className={styles.calculationDetails} open={focusSku === item.sku}><summary>Показать расчёт</summary>
+              <div className={styles.calculationPanel}>
+                <div className={styles.panelEyebrow}>Как получено количество</div>
+                <div className={styles.calculationFlow} aria-label="Ключевые этапы расчёта рекомендации">
+                  <div className={styles.calcStep}><small>Плановый спрос</small><b className={styles.num}>{number.format(item.planningMonthlyDemand)}<em>ед./мес.</em></b></div>
+                  <i aria-hidden="true">→</i>
+                  <div className={styles.calcStep}><small>Сезонность</small><b className={styles.num}>×{number.format(item.seasonalIndex)}</b></div>
+                  <i aria-hidden="true">→</i>
+                  <div className={styles.calcStep}><small>Страховой запас</small><b className={styles.num}>{number.format(item.safetyStock)}<em>ед.</em></b></div>
+                  <i aria-hidden="true">→</i>
+                  <div className={styles.calcStep}><small>Текущая позиция</small><b className={styles.num}>{number.format(item.currentPosition)}<em>ед.</em></b></div>
+                  <i aria-hidden="true">→</i>
+                  <div className={`${styles.calcStep} ${styles.calcResult}`}><small>К заказу</small><b className={styles.num}>{number.format(item.recommendedOrder)}<em>ед.</em></b></div>
+                </div>
+                <p className={styles.formulaNarrative}>{explanation(item)}</p>
+              </div>
+              {(item.projectedStockoutDate || item.nearestInboundExpectedDate) && <div className={`${styles.supplyTimeline} ${timelineTone}`}>
+                <div className={styles.timelineTitle}><span>Контур поставки</span><b>{timelineStatus}</b></div>
+                <div className={styles.timelineTrack} aria-hidden="true"><span /><i /><span /></div>
+                <div className={styles.timelineFacts}>
+                  <span><small>Запас иссякнет</small><b>{item.projectedStockoutDate ?? "не определено"}</b></span>
+                  <span><small>Ближайшая поставка</small><b>{item.nearestInboundExpectedDate ?? "ETA не указан"}</b></span>
+                </div>
+              </div>}
               {item.isOverstock && <p className={styles.overstockNote}>{item.recommendedOrder === 0 ? `Автозаказ не требуется: совокупная позиция покрывает ${number.format(item.coverageMonths ?? 0)} мес. спроса.` : `Остаток покрывает ${number.format(item.coverageMonths ?? 0)} мес. спроса — выше обычного горизонта, но небольшой заказ всё ещё рекомендован из-за страхового запаса по волатильности этого SKU.`}</p>}
               {item.stockLifecycleStatus === "slow" && <p className={styles.assumption}>Slow stock: планирование переведено на средний спрос последних трёх доступных месяцев.</p>}
               {item.stockLifecycleStatus === "dead" && <p className={styles.stockoutRisk}>Dead stock: автоматическое пополнение заблокировано, рекомендация равна нулю.</p>}
               {item.unknownEtaExcluded && <p className={styles.assumption}>Поставка без точного ETA не уменьшает заказ. После подтверждения даты менеджер может пересчитать план.</p>}
-              {narratives[narrativeKey] && <div className={styles.aiNarrative}><small>Объяснение ИИ</small><p>{narratives[narrativeKey]}</p></div>}
+              {narratives[narrativeKey] && <div className={styles.aiNarrative}>
+                <div className={styles.aiNarrativeHead}><span aria-hidden="true">AI</span><div><small>Объяснение ИИ</small><em>Интерпретация уже рассчитанных цифр</em></div></div>
+                <p>{narratives[narrativeKey]}</p>
+              </div>}
               <div className={styles.decisionPanel}>
                 <label><small>Количество менеджера</small><input type="number" min="0" step={item.moqMultiple ?? 1} value={decision.quantity} onChange={(event) => setDecisions((current) => ({ ...current, [narrativeKey]: { quantity: Math.max(0, Number(event.target.value) || 0), status: "draft" } }))} /></label>
                 <button onClick={() => setDecisions((current) => ({ ...current, [narrativeKey]: { quantity: validManagerQuantity(decision.quantity, item.moqMultiple), status: "confirmed" } }))}>Подтвердить</button>
               </div>
-              <button className={styles.aiButton} disabled={narrating[narrativeKey]} onClick={() => requestNarrative(item)}>{narrating[narrativeKey] ? "ИИ формирует объяснение…" : "Получить объяснение от ИИ"}</button>
+              <button className={`${styles.aiButton} ${narrating[narrativeKey] ? styles.aiLoading : ""}`} disabled={narrating[narrativeKey]} onClick={() => requestNarrative(item)}>{narrating[narrativeKey] ? "ИИ формирует объяснение…" : "Получить объяснение от ИИ"}</button>
             </details></td>
           </tr>;
         })}

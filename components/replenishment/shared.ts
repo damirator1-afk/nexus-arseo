@@ -33,8 +33,6 @@ export type PlanningControls = {
   /** Used only when an uploaded monthly file contains bare month values such as "07". */
   assumedYearForBareMonths?: number;
 };
-export type DataSource = "demo" | "own";
-
 export const FILE_FIELDS: Array<{ kind: FileKind; label: string; hint: string; missingTreatment: string }> = [
   { kind: "transactions", label: "Динамика продаж", hint: "Транзакции и накладные", missingTreatment: "нет транзакций — разовые всплески не исключаются" },
   { kind: "monthlySales", label: "Продажи по месяцам", hint: "Количество по SKU", missingTreatment: "нет помесячных продаж — рекомендации по спросу не формируются" },
@@ -325,17 +323,14 @@ export class MissingStockSourceError extends Error {
 }
 
 /**
- * Pure composition of the five per-supplier parsers — shared by both the manual-upload and
- * demo-fetch paths. Real partner workbooks run to hundreds of thousands of rows (IEK's sales
- * history alone is ~170k transactions); each parser call is itself a long synchronous block, so
- * this yields to the browser between steps (and reports `onProgress`) rather than running all
- * five as one uninterrupted multi-second block that would freeze clicks and repaints entirely.
+ * Pure composition of the per-supplier parsers. Large workbooks can contain hundreds of thousands
+ * of rows; each parser call is a long synchronous block, so this yields to the browser between
+ * steps (and reports `onProgress`) instead of freezing clicks and repaints for the full pipeline.
  */
 export async function buildSupplierParsedData(
   supplier: SupplierDefinition,
   buffers: Partial<Record<FileKind, Uint8Array[]>>,
   onProgress?: (label: string) => void,
-  optionalSourceKinds?: FileKind[],
   assumedYearForBareMonths?: number,
 ): Promise<SupplierParsedData> {
   const parseProvided = async <T,>(kind: FileKind, label: string, parser: (input: XlsxInput) => T[]): Promise<T[]> => {
@@ -406,12 +401,9 @@ export async function buildSupplierParsedData(
   ]);
 
   onProgress?.(`${supplier.name}: дополнительные поля…`);
-  const optionalBuffers = optionalSourceKinds
-    ? Object.fromEntries(optionalSourceKinds.flatMap((kind) => buffers[kind]?.length ? [[kind, buffers[kind]]] : []))
-    : buffers;
-  const categories = optionalRowsFromBuffers(optionalBuffers, parseSkuCategories);
-  const reservations = optionalRowsFromBuffers(optionalBuffers, parseSkuReservations);
-  const currentStocks = optionalRowsFromBuffers(optionalBuffers, parseSkuCurrentStocks);
+  const categories = optionalRowsFromBuffers(buffers, parseSkuCategories);
+  const reservations = optionalRowsFromBuffers(buffers, parseSkuReservations);
+  const currentStocks = optionalRowsFromBuffers(buffers, parseSkuCurrentStocks);
   await yieldToBrowser();
 
   if (!openingStocks.length && !currentStocks.length && !stockBatches.length) {
@@ -449,15 +441,11 @@ export async function parseSupplierFromFiles(
   onProgress?: (label: string) => void,
   assumedYearForBareMonths?: number,
 ): Promise<SupplierParsedData> {
-  return buildSupplierParsedData(supplier, await fileArraysToBuffers(files), onProgress, undefined, assumedYearForBareMonths);
+  return buildSupplierParsedData(supplier, await fileArraysToBuffers(files), onProgress, assumedYearForBareMonths);
 }
 
 export async function parseSupplierCostPrices(files: Partial<Record<FileKind, File[]>>): Promise<SkuCostPrice[]> {
   return optionalRowsFromBuffers(await fileArraysToBuffers(files), parseSkuCostPrices);
-}
-
-export function parseSupplierCostPricesFromBuffers(buffers: Partial<Record<FileKind, Uint8Array[]>>): SkuCostPrice[] {
-  return optionalRowsFromBuffers(buffers, parseSkuCostPrices);
 }
 
 export function supplierMissingTreatments(files: Partial<Record<FileKind, readonly unknown[]>>): string[] {

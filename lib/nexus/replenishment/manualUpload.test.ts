@@ -90,7 +90,7 @@ test("three of six supplier files parse and disclose missing inbound, MOQ and ba
 test("current stock embedded in an arbitrary supplier dashboard satisfies the stock-source rule", async () => {
   const parsed = await buildSupplierParsedData({ key: "beta", name: "Бета" }, {
     inbound: [workbookBytes([
-      ["Код 1с", "Наименование", "Категория 2026", "Остаток", "Зарезервировано", "СЭ в пути 30.09"],
+      ["Код 1с", "Наименование", "Категория 2026", "Остаток", "Зарезервировано", "В пути 30.09"],
       ["SKU-1", "Автомат", "A", 20, 3, 0],
     ])],
   });

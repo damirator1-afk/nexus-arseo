@@ -139,7 +139,7 @@ test("grouped no-SKU report reads 'month year' header and keeps the full product
 });
 
 test("grouped 1C report finds the real header even when a second 'Количество' block sits lower in the sheet and earlier in !merges", () => {
-  // Regression test: a real partner export repeated "Количество" for a second, unrelated by-product
+  // Regression test: a source export repeated "Количество" for a second, unrelated by-product
   // summary further down the sheet. !merges is not guaranteed to be in document order, so the decoy
   // (listed first in !merges, but on a later row) must not be picked over the real header above the data.
   const rows: unknown[][] = [
@@ -230,9 +230,9 @@ test("opening-stock parser skips qualifier rows and emits one record per availab
   ]);
 });
 
-test("IEK inbound parser expands dated shipment columns", () => {
+test("inbound parser expands dated shipment columns", () => {
   const bytes = workbookBytes([
-    ["Код 1с", "Артикул ИЭК", "Наименование", "УТ-8231 (поступление до 30.09.2026)", "УТ-8234 (поступление до 15.10.2026)"],
+    ["Код 1с", "Артикул поставщика", "Наименование", "Поставка 1 (поступление до 30.09.2026)", "Поставка 2 (поступление до 15.10.2026)"],
     ["SKU-1", "ART-1", "Автомат", 20, 30],
     ["SKU-2", "ART-2", "Кабель", null, 5],
   ]);
@@ -241,36 +241,36 @@ test("IEK inbound parser expands dated shipment columns", () => {
   assert.equal(parsed.length, 3);
   assert.deepEqual(parsed[0], {
     sku: "SKU-1", supplierArticle: "ART-1", productName: "Автомат",
-    shipmentId: "УТ-8231 (поступление до 30.09.2026)", expectedDate: "2026-09-30", quantity: 20,
+    shipmentId: "Поставка 1 (поступление до 30.09.2026)", expectedDate: "2026-09-30", quantity: 20,
   });
 });
 
-test("Systeme Electric inbound parser selects only the aggregate in-transit column from a dashboard", () => {
+test("inbound parser selects only the aggregate in-transit column from a dashboard", () => {
   const bytes = workbookBytes([
     [null, null, null, null, "СКЛАДЫ"],
-    ["№", "Артикул поставщика", "Код 1с", "Наименование", "Кэф. Роста", "Кэф. Сез-ти", "Остаток", "СЭ в пути 24.09"],
+    ["№", "Артикул поставщика", "Код 1с", "Наименование", "Кэф. Роста", "Кэф. Сез-ти", "Остаток", "Всего в пути 24.09"],
     [1, "ART-1", "SKU-1", "Автомат", 1.4, 0.8, 11, 40],
     [2, "ART-2", "SKU-2", "Кабель", 9.9, 9.9, 20, 0],
   ]);
 
   assert.deepEqual(parseInboundShipments(bytes), [{
     sku: "SKU-1", supplierArticle: "ART-1", productName: "Автомат",
-    shipmentId: "СЭ в пути 24.09", expectedDate: null, quantity: 40,
+    shipmentId: "Всего в пути 24.09", expectedDate: null, quantity: 40,
   }]);
 });
 
-test("MOQ parser normalizes both partner header variants", () => {
-  const iek = workbookBytes([
+test("MOQ parser normalizes supported generic header variants", () => {
+  const compact = workbookBytes([
     ["№", "Код 1с", "Артикул поставщика", "Наименование", "Мин. разр. к отгр."],
     [1, "SKU-1", "ART-1", "Автомат", 12],
   ]);
-  const systeme = workbookBytes([
+  const expanded = workbookBytes([
     ["№", "Номенклатура", "Номенклатура.Код", "Артикул", "Кратность"],
     [null, null, null, null, null],
     [1, "Кабель", "SKU-2", "ART-2", 5],
   ]);
-  assert.deepEqual(parseMinimumOrderQuantities(iek), [{ sku: "SKU-1", supplierArticle: "ART-1", productName: "Автомат", multiple: 12 }]);
-  assert.deepEqual(parseMinimumOrderQuantities(systeme), [{ sku: "SKU-2", supplierArticle: "ART-2", productName: "Кабель", multiple: 5 }]);
+  assert.deepEqual(parseMinimumOrderQuantities(compact), [{ sku: "SKU-1", supplierArticle: "ART-1", productName: "Автомат", multiple: 12 }]);
+  assert.deepEqual(parseMinimumOrderQuantities(expanded), [{ sku: "SKU-2", supplierArticle: "ART-2", productName: "Кабель", multiple: 5 }]);
 });
 
 test("reservation parser reads reserved customer stock and clamps negative values to zero", () => {

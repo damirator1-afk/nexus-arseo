@@ -70,7 +70,7 @@ export function telegramShareUrl(message: string, sourceUrl = ""): string {
 }
 
 export function supplierOrderCsv(lines: ConfirmedOrderLine[], asOfMonth: string): string {
-  // Prefix formula-like spreadsheet text so partner-provided names/SKUs cannot execute as a
+  // Prefix formula-like spreadsheet text so uploaded names/SKUs cannot execute as a
   // formula when the CSV is opened in Excel. Numeric quantities remain numeric text as before.
   const cell = (value: string | number): string => {
     const raw = String(value);
