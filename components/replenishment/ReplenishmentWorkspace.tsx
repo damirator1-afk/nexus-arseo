@@ -180,13 +180,18 @@ export function ReplenishmentWorkspace() {
 
   return <main className={styles.shell} ref={shellRef}>
     <header className={styles.topbar}>
-      <a href="/" className={styles.brand}>
-        {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset, no next/image usage elsewhere in this app */}
-        <img src="/brand/arseo-logo.png" alt="ARSEO" className={styles.arseoLogo} width={277} height={277} />
+      <a href="/" className={styles.brand} aria-label="ARSEO Nexus — Автозаказ">
+        <span className={styles.arseoBrand}>
+          <span className={styles.arseoMark} aria-hidden="true">
+            {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset, no next/image usage elsewhere in this app */}
+            <img src="/brand/arseo-logo.png" alt="" className={styles.arseoLogo} width={277} height={277} />
+          </span>
+          <small className={styles.brandWord}>ARSEO</small>
+        </span>
         <span className={styles.nexusBrand}>
           {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset, no next/image usage elsewhere in this app */}
-          <img src="/brand/nexus-logo.png" alt="Nexus" className={styles.brandLogo} width={1481} height={411} />
-          <small className={styles.brandTagline}>Автозаказ</small>
+          <img src="/brand/nexus-logo.png" alt="" className={styles.brandLogo} width={1481} height={411} />
+          <small className={`${styles.brandWord} ${styles.brandTagline}`}>Автозаказ</small>
         </span>
       </a>
       <div className={styles.topbarTools}>
