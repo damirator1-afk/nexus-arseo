@@ -182,8 +182,12 @@ export function ReplenishmentWorkspace() {
     <header className={styles.topbar}>
       <a href="/" className={styles.brand}>
         {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset, no next/image usage elsewhere in this app */}
-        <img src="/brand/nexus-logo.png" alt="Nexus" className={styles.brandLogo} width={1481} height={411} />
-        <small className={styles.brandTagline}>Arseo · Автозаказ</small>
+        <img src="/brand/arseo-logo.png" alt="ARSEO" className={styles.arseoLogo} width={277} height={277} />
+        <span className={styles.nexusBrand}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset, no next/image usage elsewhere in this app */}
+          <img src="/brand/nexus-logo.png" alt="Nexus" className={styles.brandLogo} width={1481} height={411} />
+          <small className={styles.brandTagline}>Автозаказ</small>
+        </span>
       </a>
       <div className={styles.topbarTools}>
         <span className={styles.engineState}><i aria-hidden="true" />Расчётный контур</span>
